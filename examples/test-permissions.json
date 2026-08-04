@@ -1,0 +1,20 @@
+{
+  "app_name": "test-perms",
+  "target_gd": "openback-gd-v1",
+  "dependencies": [
+    "python-runtime@3.11"
+  ],
+  "permissions": {
+    "devices": [
+      "/dev/net/tun"
+    ],
+    "capabilities": [
+      "CAP_NET_ADMIN"
+    ]
+  },
+  "entrypoint": [
+    "/deps/python-runtime/3.11/bin/python3",
+    "-c",
+    "import os; print('Devices:', os.listdir('/dev')); print('Finished')"
+  ]
+}

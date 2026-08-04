@@ -1,0 +1,9 @@
+{
+  "name": "worker-service",
+  "target_gd": "openback-gd-v1",
+  "dependencies": [
+    { "name": "python-runtime", "version": "3.11" }
+  ],
+  "exec": "/deps/python-runtime/3.11/bin/python3",
+  "args": ["/app/app.py"]
+}
