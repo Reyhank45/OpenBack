@@ -1,0 +1,11 @@
+apiVersion: openback.io/v1
+kind: Application
+metadata:
+  name: python-demoapp
+spec:
+  baseImage: glibc-v1
+  dependencies: []
+  replicas: 6
+  entrypoint:
+    - /bin/sleep
+    - "1000"

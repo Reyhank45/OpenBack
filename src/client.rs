@@ -1,12 +1,12 @@
-use crate::manifest::AppManifest;
-use crate::rpc::{RpcRequest, RpcResponse};
+use openback::manifest::AppManifest;
+use openback::rpc::{RpcRequest, RpcResponse};
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 async fn send_rpc_request(request: RpcRequest) -> Result<RpcResponse> {
-    let socket_path = "/tmp/openbackd.sock";
+    let socket_path = &std::env::var("OPENBACK_SOCKET").unwrap_or_else(|_| "/tmp/openbackd.sock".to_string());
     let mut stream = UnixStream::connect(socket_path)
         .await
         .with_context(|| format!("Failed to connect to daemon at {}", socket_path))?;
@@ -72,8 +72,126 @@ pub async fn stop(app_name: String) -> Result<()> {
 }
 
 pub async fn logs(app_name: String) -> Result<()> {
-    match send_rpc_request(RpcRequest::Logs(app_name)).await? {
+    match send_rpc_request(RpcRequest::Logs { app_name, tail: None }).await? {
         RpcResponse::Ok(logs) => print!("{}", logs),
+        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn deps_list() -> Result<()> {
+    match send_rpc_request(RpcRequest::DepsList).await? {
+        RpcResponse::DepsList(deps) => {
+            println!("{:<30} | {:<15} | {:<10} | {:<30}", "DEPENDENCY", "VERSION", "SIZE (MB)", "ACTIVE CONSUMERS");
+            println!("{:-<30}-+-{:-<15}-+-{:-<10}-+-{:-<30}", "", "", "", "");
+            for d in deps {
+                let size_mb = d.size_bytes as f64 / 1_048_576.0;
+                let consumers_str = if d.consumers.is_empty() {
+                    "None".to_string()
+                } else {
+                    format!("{} ({})", d.consumers.len(), d.consumers.join(", "))
+                };
+                println!("{:<30} | {:<15} | {:<10.2} | {:<30}", d.name, d.version, size_mb, consumers_str);
+            }
+        }
+        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn deps_inspect(name: String) -> Result<()> {
+    match send_rpc_request(RpcRequest::DepsInspect(name)).await? {
+        RpcResponse::DepDetails(details) => {
+            let json = serde_json::to_string_pretty(&details)?;
+            println!("{}", json);
+        }
+        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn deps_prune() -> Result<()> {
+    match send_rpc_request(RpcRequest::DepsPrune).await? {
+        RpcResponse::PruneResult(pruned) => {
+            if pruned.is_empty() {
+                println!("No unused dependencies found. Nothing to prune.");
+            } else {
+                println!("Successfully pruned unused dependencies:");
+                for p in pruned {
+                    println!("  - {}", p);
+                }
+            }
+        }
+        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn deps_remove(name: String, force: bool) -> Result<()> {
+    match send_rpc_request(RpcRequest::DepsRemove { name, force }).await? {
+        RpcResponse::Ok(msg) => println!("Success: {}", msg),
+        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn base_list() -> Result<()> {
+    match send_rpc_request(RpcRequest::BaseList).await? {
+        RpcResponse::BaseList(bases) => {
+            println!("{:<25} | {:<10} | {:<10} | {:<10} | {:<15} | {:<25}", "BASE NAME", "OS", "LIBC", "ARCH", "SIZE (MB)", "ACTIVE CONSUMERS");
+            println!("{:-<25}-+-{:-<10}-+-{:-<10}-+-{:-<10}-+-{:-<15}-+-{:-<25}", "", "", "", "", "", "");
+            for b in bases {
+                let size_mb = b.size_bytes as f64 / 1_048_576.0;
+                let consumers_str = if b.consumers.is_empty() {
+                    "None".to_string()
+                } else {
+                    format!("{} ({})", b.consumers.len(), b.consumers.join(", "))
+                };
+                
+                let (os, libc, arch) = if let Some(m) = b.manifest {
+                    (m.os, m.libc, m.architecture)
+                } else {
+                    ("unknown".to_string(), "unknown".to_string(), "unknown".to_string())
+                };
+
+                println!("{:<25} | {:<10} | {:<10} | {:<10} | {:<15.2} | {:<25}", b.name, os, libc, arch, size_mb, consumers_str);
+            }
+        }
+        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn base_inspect(name: String) -> Result<()> {
+    match send_rpc_request(RpcRequest::BaseInspect(name)).await? {
+        RpcResponse::BaseDetails(details) => {
+            let json = serde_json::to_string_pretty(&details)?;
+            println!("{}", json);
+        }
+        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn base_prune() -> Result<()> {
+    match send_rpc_request(RpcRequest::BasePrune).await? {
+        RpcResponse::PruneResult(pruned) => {
+            if pruned.is_empty() {
+                println!("No unused base images found. Nothing to prune.");
+            } else {
+                println!("Successfully pruned unused base images:");
+                for p in pruned {
+                    println!("  - {}", p);
+                }
+            }
+        }
         RpcResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }

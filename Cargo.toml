@@ -13,3 +13,14 @@ anyhow = "1.0.104"
 libc = "0.2.189"
 chrono = "0.4.45"
 caps = "0.5"
+serde_yaml = "0.9"
+rand = "0.8"
+sysinfo = "0.39.6"
+
+[[bin]]
+name = "openback"
+path = "src/main.rs"
+
+[[bin]]
+name = "backcli"
+path = "src/backcli.rs"

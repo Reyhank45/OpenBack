@@ -1,4 +1,4 @@
-use crate::manifest::AppManifest;
+use openback::manifest::AppManifest;
 use anyhow::{Context, Result};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::sched::{unshare, CloneFlags};
@@ -9,10 +9,6 @@ use std::process::Command;
 
 pub fn launch_container(manifest_json: String) -> Result<()> {
     let manifest: AppManifest = serde_json::from_str(&manifest_json)?;
-
-    if manifest.target_gd.is_empty() {
-        anyhow::bail!("Manifest is missing a valid target_gd");
-    }
 
     println!("[Launcher] Unsharing Mount, PID, and Network namespaces...");
     unshare(CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNET)
@@ -65,10 +61,15 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
         None::<&str>,
     ).context("Failed to make root private")?;
 
-    let app_workspace = format!("/tmp/openback/store/apps/{}", manifest.app_name);
+    let app_workspace = format!("{}/store/apps/{}", std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string()), manifest.app_name);
     let app_rootfs = format!("{}/rootfs", app_workspace);
-    let gd_path = format!("/tmp/openback/store/gd/{}", manifest.target_gd);
-    let deps_base = "/tmp/openback/store/deps";
+    if manifest.target_gd.is_some() {
+        println!("[Container PID 1] [WARN] 'target_gd' is deprecated, please use 'base_image' in the manifest.");
+    }
+
+    let base_image = manifest.get_base_image();
+    let gd_path = format!("{}/store/bases/{}", std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string()), base_image);
+    let deps_base = &format!("{}/store/deps", std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string()));
     
     std::fs::create_dir_all(&app_rootfs)?;
     
