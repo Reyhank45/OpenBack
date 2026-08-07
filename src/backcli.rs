@@ -42,6 +42,8 @@ enum Commands {
     },
     /// Edit an application in $EDITOR
     Edit { resource: String, name: String },
+    /// Attach to a running replica for live logs and interactive terminal
+    Attach { name: String },
 }
 
 async fn send_rpc_request(request: RpcRequest) -> Result<RpcResponse> {
@@ -237,6 +239,53 @@ async fn get_nodes() -> Result<()> {
     Ok(())
 }
 
+async fn attach_app(app_name: String) -> Result<()> {
+    let socket_path =
+        &std::env::var("OPENBACK_SOCKET").unwrap_or_else(|_| "/tmp/openbackd.sock".to_string());
+    let mut stream = UnixStream::connect(socket_path)
+        .await
+        .with_context(|| format!("Failed to connect to daemon at {}", socket_path))?;
+
+    let request = RpcRequest::Attach { app_name };
+    let mut payload = serde_json::to_string(&request)?;
+    payload.push('\n');
+
+    stream.write_all(payload.as_bytes()).await?;
+
+    let mut buf_reader = BufReader::new(&mut stream);
+    let mut line = String::new();
+    buf_reader.read_line(&mut line).await?;
+
+    if line.is_empty() {
+        anyhow::bail!("Daemon closed connection unexpectedly");
+    }
+
+    let response: RpcResponse = serde_json::from_str(&line)?;
+    match response {
+        RpcResponse::AttachStream => {
+            println!("Attached to stream. Press Ctrl-C to detach.");
+            let stream = buf_reader.into_inner();
+            
+            // Set terminal to raw mode if possible (for sending inputs directly)
+            // But for simplicity, we just pipe stdin and stdout
+            let (mut reader, mut writer) = tokio::io::split(stream);
+            let mut stdin = tokio::io::stdin();
+            let mut stdout = tokio::io::stdout();
+
+            let to_stdout = tokio::io::copy(&mut reader, &mut stdout);
+            let from_stdin = tokio::io::copy(&mut stdin, &mut writer);
+
+            tokio::select! {
+                _ = to_stdout => (),
+                _ = from_stdin => (),
+            }
+        }
+        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response"),
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -276,6 +325,9 @@ async fn main() -> Result<()> {
             if resource == "app" {
                 edit_app(name).await?;
             }
+        }
+        Commands::Attach { name } => {
+            attach_app(name).await?;
         }
     }
     Ok(())

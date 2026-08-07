@@ -85,7 +85,11 @@ pub async fn logs(app_name: String) -> Result<()> {
     })
     .await?
     {
-        RpcResponse::Ok(logs) => print!("{}", logs),
+        RpcResponse::LogLines(lines) => {
+            for line in lines {
+                println!("{}", line);
+            }
+        }
         RpcResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }

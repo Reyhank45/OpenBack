@@ -22,6 +22,13 @@ pub struct Permissions {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PackageDirectives {
+    pub apt: Option<Vec<String>>,
+    pub apk: Option<Vec<String>>,
+    pub dnf: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppManifest {
     pub app_name: String,
     #[serde(default)]
@@ -29,6 +36,12 @@ pub struct AppManifest {
     #[serde(default)]
     pub target_gd: Option<String>,
     pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub packages: Option<PackageDirectives>,
+    #[serde(default)]
+    pub app_source: Option<String>,
+    #[serde(default)]
+    pub work_dir: Option<String>,
     #[serde(default)]
     pub permissions: Option<Permissions>,
     #[serde(default)]

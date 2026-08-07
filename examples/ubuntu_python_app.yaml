@@ -1,0 +1,15 @@
+apiVersion: openback.io/v1
+kind: Application
+metadata:
+  name: ubuntu-python-demo
+spec:
+  baseImage: ubuntu-24.04
+  packages:
+    apt:
+      - python3
+  workDir: /app
+  replicas: 2
+  entrypoint:
+    - python3
+    - -c
+    - "import sys; print('Running Python from automated overlay on:', sys.version)"

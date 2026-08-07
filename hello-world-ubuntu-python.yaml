@@ -1,0 +1,20 @@
+apiVersion: openback.io/v1
+kind: Application
+metadata:
+  name: hello-world-ubuntu-python
+spec:
+  baseImage: ubuntu-24.04
+  packages:
+    apt:
+      - python3
+  workDir: /app
+  replicas: 1
+  entrypoint:
+    - python3
+    - -c
+    - "import socket, http.server, socketserver, os; s=os.environ.get('OPENBACK_IPC_SOCKET', '/run/app.sock'); os.path.exists(s) and os.remove(s); server=socketserver.UnixStreamServer(s, http.server.SimpleHTTPRequestHandler); print('Serving on', s); server.serve_forever()"
+  networking:
+    ipc_socket: /run/app.sock
+    ports:
+      - host_port: 8080
+        container_socket: /run/app.sock

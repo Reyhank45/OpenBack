@@ -1,0 +1,20 @@
+apiVersion: openback.io/v1
+kind: Application
+metadata:
+  name: hello-world-ubuntu-node
+spec:
+  baseImage: ubuntu-24.04
+  packages:
+    apt:
+      - nodejs
+  workDir: /app
+  replicas: 1
+  entrypoint:
+    - node
+    - -e
+    - "const http = require('http'); const server = http.createServer((req, res) => { res.writeHead(200); res.end('Hello World from Ubuntu Node!'); }); server.listen(8081, () => { console.log('Listening on port 8081'); });"
+  networking:
+    ipc_socket: /run/app.sock
+    ports:
+      - host_port: 8081
+        container_socket: /run/app.sock

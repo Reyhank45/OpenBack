@@ -1,0 +1,20 @@
+apiVersion: openback.io/v1
+kind: Application
+metadata:
+  name: hello-world-alpine-node
+spec:
+  baseImage: alpine-3.20
+  packages:
+    apk:
+      - nodejs
+  workDir: /app
+  replicas: 1
+  entrypoint:
+    - node
+    - -e
+    - "const http = require('http'); const server = http.createServer((req, res) => { res.writeHead(200); res.end('Hello World from Alpine Node!'); }); server.listen(8083, () => { console.log('Listening on port 8083'); });"
+  networking:
+    ipc_socket: /run/app.sock
+    ports:
+      - host_port: 8083
+        container_socket: /run/app.sock

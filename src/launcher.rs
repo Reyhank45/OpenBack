@@ -70,88 +70,42 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
     )
     .context("Failed to make root private")?;
 
-    let app_workspace = format!(
-        "{}/store/apps/{}",
-        std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string()),
-        manifest.app_name
-    );
-    let app_rootfs = format!("{}/rootfs", app_workspace);
-    if manifest.target_gd.is_some() {
-        println!("[Container PID 1] [WARN] 'target_gd' is deprecated, please use 'base_image' in the manifest.");
-    }
-
     let base_image = manifest.get_base_image();
-    let gd_path = format!(
-        "{}/store/bases/{}",
-        std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string()),
-        base_image
-    );
-    let deps_base = &format!(
-        "{}/store/deps",
-        std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string())
-    );
+    let base_dir = format!("/var/lib/openback/store/images/{}", base_image);
+    
+    let replica_id = &manifest.app_name;
+    let replica_base = format!("/tmp/openback/replicas/{}", replica_id);
+    let replica_upper = format!("{}/upper", replica_base);
+    let replica_work = format!("{}/work", replica_base);
+    let target_root = format!("{}/rootfs", replica_base);
 
-    std::fs::create_dir_all(&app_rootfs)?;
+    std::fs::create_dir_all(&replica_upper)?;
+    std::fs::create_dir_all(&replica_work)?;
+    std::fs::create_dir_all(&target_root)?;
 
-    // 1. Bind-mount GD Base into rootfs
-    mount(
-        Some(gd_path.as_str()),
-        app_rootfs.as_str(),
-        Some("bind"),
-        MsFlags::MS_BIND,
-        None::<&str>,
-    )
-    .with_context(|| format!("Failed to bind mount GD Base layer from {}", gd_path))?;
-
-    let deps_in_rootfs = format!("{}/deps", app_rootfs);
-    std::fs::create_dir_all(&deps_in_rootfs)?;
-
-    // Mount tmpfs over /deps in rootfs
-    mount(
-        Some("tmpfs"),
-        deps_in_rootfs.as_str(),
-        Some("tmpfs"),
-        MsFlags::empty(),
-        None::<&str>,
-    )
-    .context("Failed to mount tmpfs for dependencies")?;
-
-    for dep_str in &manifest.dependencies {
-        let parts: Vec<&str> = dep_str.split('@').collect();
-        if parts.len() != 2 {
-            anyhow::bail!("Invalid dependency format: {}", dep_str);
+    let mut lower_dirs = vec![base_dir.clone()];
+    if let Some(overlay_path) = openback::engine::overlay::OverlayEngine::get_overlay_path(&manifest) {
+        if std::path::Path::new(&overlay_path).exists() {
+            lower_dirs.insert(0, overlay_path); // Package overlay is on top of base image
         }
-        let dep_name = parts[0];
-        let dep_version = parts[1];
-
-        let host_dep_path = format!("{}/{}/{}", deps_base, dep_name, dep_version);
-        let stage_dep_path = format!("{}/{}/{}", deps_in_rootfs, dep_name, dep_version);
-
-        println!(
-            "[Container PID 1] Mounting dependency: {}@{}",
-            dep_name, dep_version
-        );
-
-        std::fs::create_dir_all(&stage_dep_path)?;
-
-        mount(
-            Some(host_dep_path.as_str()),
-            stage_dep_path.as_str(),
-            Some("bind"),
-            MsFlags::MS_BIND,
-            None::<&str>,
-        )
-        .with_context(|| format!("Failed to bind mount {}", host_dep_path))?;
-
-        mount(
-            Some("none"),
-            stage_dep_path.as_str(),
-            Some("bind"),
-            MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
-            None::<&str>,
-        )
-        .with_context(|| format!("Failed to remount {} as read-only", host_dep_path))?;
     }
+    
+    let lower_dirs_str = lower_dirs.join(":");
+    let mount_options = format!(
+        "lowerdir={},upperdir={},workdir={}",
+        lower_dirs_str, replica_upper, replica_work
+    );
+
+    mount(
+        Some("overlay"),
+        target_root.as_str(),
+        Some("overlay"),
+        MsFlags::MS_NODEV,
+        Some(mount_options.as_str()),
+    ).context("Failed to mount 3-tier OverlayFS")?;
+
+    let app_rootfs = target_root;
+    let app_workspace = replica_base;
 
     // Mount /run for IPC sockets
     let app_run_dir = format!("{}/run", app_workspace);
@@ -167,19 +121,21 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
     )
     .context("Failed to bind mount run directory")?;
 
-    // Mount /app for the application source code
-    let app_src_dir = format!("{}/src", app_workspace);
+    // Mount /app for the application source code if provided
     let rootfs_app = format!("{}/app", app_rootfs);
-    std::fs::create_dir_all(&app_src_dir)?;
     std::fs::create_dir_all(&rootfs_app)?;
-    mount(
-        Some(app_src_dir.as_str()),
-        rootfs_app.as_str(),
-        Some("bind"),
-        MsFlags::MS_BIND,
-        None::<&str>,
-    )
-    .context("Failed to bind mount app directory")?;
+    if let Some(app_source) = &manifest.app_source {
+        let host_app_dir = app_source; // Path relative to launcher or absolute
+        std::fs::create_dir_all(host_app_dir).ok();
+        mount(
+            Some(host_app_dir.as_str()),
+            rootfs_app.as_str(),
+            Some("bind"),
+            MsFlags::MS_BIND | MsFlags::MS_REC,
+            None::<&str>,
+        )
+        .context("Failed to bind mount app_source directory")?;
+    }
 
     // Mount /proc for $ORIGIN dynamic linking resolution and other tools
     let rootfs_proc = format!("{}/proc", app_rootfs);
@@ -256,22 +212,16 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
     let old_root = format!("{}/oldroot", app_rootfs);
     std::fs::create_dir_all(&old_root)?;
 
-    // Now remount the rootfs as read-only
-    mount(
-        Some("none"),
-        app_rootfs.as_str(),
-        Some("bind"),
-        MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
-        None::<&str>,
-    )
-    .context("Failed to remount rootfs read-only")?;
+    // The rootfs is already overlayfs, so we don't strictly need to remount it read-only
+    // since upperdir gives us the writable tmp space we need, but we could if we wanted strict ro root.
 
     // 3. Pivot Root
     println!("[Container PID 1] Changing root to {}", app_rootfs);
     pivot_root(app_rootfs.as_str(), old_root.as_str()).context("pivot_root failed")?;
 
-    // Change current directory to new root
-    chdir("/").context("Failed to chdir to /")?;
+    // Change current directory to work_dir
+    let work_dir = manifest.work_dir.clone().unwrap_or_else(|| "/app".to_string());
+    chdir(work_dir.as_str()).context(format!("Failed to chdir to {}", work_dir))?;
 
     // Unmount the old root
     umount2("/oldroot", MntFlags::MNT_DETACH).context("Failed to unmount old root")?;
@@ -291,6 +241,16 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
     // Inject custom environment variables
     for (k, v) in &manifest.env {
         cmd.env(k, v);
+    }
+
+    if let Ok(fifo_path) = std::env::var("OPENBACK_STDIN_FIFO") {
+        if let Ok(fifo_file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true) // O_RDWR prevents blocking on open for FIFOs
+            .open(&fifo_path)
+        {
+            cmd.stdin(std::process::Stdio::from(fifo_file));
+        }
     }
 
     if let Some(net) = manifest.networking {

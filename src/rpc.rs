@@ -47,6 +47,8 @@ pub enum RpcRequest {
         ram_usage: f32,
     },
     SyncState(KubeApplication),
+    /// Attach to a running replica — stream log output and forward stdin.
+    Attach { app_name: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -73,6 +75,12 @@ pub struct Spec {
     pub target_gd: Option<String>,
     #[serde(default)]
     pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub packages: Option<crate::manifest::PackageDirectives>,
+    #[serde(default)]
+    pub app_source: Option<String>,
+    #[serde(default)]
+    pub work_dir: Option<String>,
     #[serde(default)]
     pub replicas: Option<usize>,
     #[serde(default)]
@@ -147,6 +155,8 @@ pub enum RpcResponse {
     DescribeDetails(AppDescription),
     NodeList(Vec<NodeInfo>),
     LogLines(Vec<String>),
+    /// Sentinel: daemon is switching to raw attach streaming mode.
+    AttachStream,
 }
 
 #[cfg(test)]

@@ -17,9 +17,12 @@ use tokio::sync::Mutex;
 
 struct AppState {
     pid: u32,
+    is_building: bool,
+    exit_code: Option<i32>,
     manifest: AppManifest,
     start_time: DateTime<Local>,
     log_file: String,
+    stdin_fifo: Option<String>,
     proxy_tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -92,7 +95,7 @@ pub async fn run_daemon(
         );
     }
 
-    println!("OpenBack Daemon listening on {}", socket_path);
+    openback::dlog!("Daemon", "INFO", "OpenBack Daemon listening on {}", socket_path);
 
     let _role_clone = role.clone();
     let cluster_token_clone = cluster_token.clone();
@@ -123,7 +126,7 @@ pub async fn run_daemon(
                         if now.duration_since(node.last_seen).as_secs() > 15
                             && node.role != "OFFLINE"
                         {
-                            println!("Node {} missed heartbeats, marking OFFLINE", hostname);
+                            openback::dlog!("Daemon", "INFO", "Node {} missed heartbeats, marking OFFLINE", hostname);
                             node.role = "OFFLINE".to_string();
                             dead_nodes.push(hostname.clone());
                         }
@@ -159,7 +162,7 @@ pub async fn run_daemon(
                         }
                         for r in to_remove {
                             map.remove(&r);
-                            println!("Reconciler evicted dead replica: {}", r);
+                            openback::dlog!("Daemon", "INFO", "Reconciler evicted dead replica: {}", r);
                         }
                     }
 
@@ -173,7 +176,7 @@ pub async fn run_daemon(
                         if let Ok(content) = std::fs::read_to_string(&deploy_file) {
                             if let Ok(kube_app) = serde_yaml::from_str::<KubeApplication>(&content)
                             {
-                                println!("Rescheduling workloads for app: {}", app_name);
+                                openback::dlog!("Daemon", "INFO", "Rescheduling workloads for app: {}", app_name);
                                 let _ = reconcile_deployment(
                                     &app_name,
                                     &kube_app,
@@ -190,7 +193,7 @@ pub async fn run_daemon(
     }
 
     if let Some(p) = port {
-        println!("OpenBack Daemon listening on TCP 0.0.0.0:{}", p);
+        openback::dlog!("Daemon", "INFO", "OpenBack Daemon listening on TCP 0.0.0.0:{}", p);
         let tcp_listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", p)).await?;
 
         let registry_tcp = node_registry.clone();
@@ -218,7 +221,7 @@ pub async fn run_daemon(
                                 // Authenticate
                                 if expected_token.is_some() && envelope.auth_token != expected_token
                                 {
-                                    eprintln!("Security Warning: Rejected TCP connection with invalid token.");
+                                    openback::dlog!("Daemon", "ERROR", "Security Warning: Rejected TCP connection with invalid token.");
                                     let _ = tokio::io::AsyncWriteExt::write_all(
                                         &mut writer,
                                         b"{\"Error\":\"Invalid token\"}\n",
@@ -339,10 +342,15 @@ pub async fn run_daemon(
                             return;
                         }
 
+                        let request_clone = match serde_json::from_str::<RpcRequest>(&line) {
+                            Ok(req) => Some(req),
+                            Err(_) => None,
+                        };
+
                         let registry_unix = registry_unix.clone();
-                        let response = match serde_json::from_str::<RpcRequest>(&line) {
-                            Ok(request) => handle_request(request, state, registry_unix).await,
-                            Err(e) => RpcResponse::Error(format!("Invalid RPC request: {}", e)),
+                        let response = match request_clone.clone() {
+                            Some(request) => handle_request(request, state.clone(), registry_unix).await,
+                            None => RpcResponse::Error("Invalid RPC request".to_string()),
                         };
 
                         if let Ok(response_str) = serde_json::to_string(&response) {
@@ -350,109 +358,259 @@ pub async fn run_daemon(
                                 .write_all(format!("{}\n", response_str).as_bytes())
                                 .await;
                         }
+
+                        if matches!(response, RpcResponse::AttachStream) {
+                            if let Some(RpcRequest::Attach { app_name }) = request_clone {
+                                handle_attach_stream(app_name, state.clone(), buf_reader, writer).await;
+                            }
+                        }
                     }
                 });
             }
-            Err(e) => eprintln!("Failed to accept connection: {}", e),
+            Err(e) => openback::dlog!("Daemon", "ERROR", "Failed to accept connection: {}", e),
         }
     }
+}
+
+async fn handle_attach_stream(
+    app_name: String,
+    state: Arc<tokio::sync::Mutex<HashMap<String, AppState>>>,
+    mut buf_reader: BufReader<tokio::net::unix::ReadHalf<'_>>,
+    mut writer: tokio::net::unix::WriteHalf<'_>,
+) {
+    let (log_file, stdin_fifo) = {
+        let map = state.lock().await;
+        if let Some(app) = map.get(&app_name) {
+            (app.log_file.clone(), app.stdin_fifo.clone())
+        } else {
+            return;
+        }
+    };
+
+    let log_file_path = log_file.clone();
+    
+    // Spawn task to read logs and write to socket
+    let mut log_child = match tokio::process::Command::new("tail")
+        .arg("-n")
+        .arg("50")
+        .arg("-f")
+        .arg(&log_file_path)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return,
+    };
+
+    let mut log_stdout = log_child.stdout.take().unwrap();
+    
+    let to_socket = tokio::io::copy(&mut log_stdout, &mut writer);
+
+    // Write to FIFO
+    let from_socket = async {
+        if let Some(fifo_path) = stdin_fifo {
+            if let Ok(mut fifo) = tokio::fs::OpenOptions::new().write(true).open(&fifo_path).await {
+                let _ = tokio::io::copy(&mut buf_reader, &mut fifo).await;
+            } else {
+                let mut discard = tokio::io::sink();
+                let _ = tokio::io::copy(&mut buf_reader, &mut discard).await;
+            }
+        } else {
+            let mut discard = tokio::io::sink();
+            let _ = tokio::io::copy(&mut buf_reader, &mut discard).await;
+        }
+    };
+
+    tokio::select! {
+        _ = to_socket => (),
+        _ = from_socket => (),
+    }
+    
+    let _ = log_child.kill().await;
 }
 
 async fn spawn_replica(
     manifest: openback::manifest::AppManifest,
     state: Arc<tokio::sync::Mutex<std::collections::HashMap<String, AppState>>>,
 ) -> Result<(), String> {
-    let mut map = state.lock().await;
-    if map.contains_key(&manifest.app_name) {
-        return Err("Already running".into());
-    }
-
-    let log_dir = &format!(
-        "{}/logs",
-        std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string())
-    );
-    let _ = std::fs::create_dir_all(log_dir);
-    let log_file = format!("{}/{}.log", log_dir, manifest.app_name);
-
-    let log_out = std::fs::File::create(&log_file).map_err(|e| e.to_string())?;
-    let log_err = log_out.try_clone().map_err(|e| e.to_string())?;
-
-    let manifest_json = serde_json::to_string(&manifest).unwrap();
-    let current_exe = std::env::current_exe().unwrap_or_else(|_| "openback".into());
-
-    let mut proxy_tasks = Vec::new();
-    if let Some(networking) = &manifest.networking {
-        for port_mapping in &networking.ports {
-            let host_port = port_mapping.host_port;
-            let app_name = manifest.app_name.clone();
-            let container_socket = port_mapping.container_socket.clone();
-
-            let tcp_listener =
-                match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", host_port)).await {
-                    Ok(l) => l,
-                    Err(e) => return Err(format!("Failed to bind TCP port: {}", e)),
-                };
-
-            let proxy_task = tokio::spawn(async move {
-                let socket_path = container_socket.replace(
-                    "/run",
-                    &format!(
-                        "{}/store/apps/{}/run",
-                        std::env::var("OPENBACK_STORE_DIR")
-                            .unwrap_or_else(|_| "/tmp/openback".to_string()),
-                        app_name
-                    ),
-                );
-                while let Ok((mut tcp_stream, _)) = tcp_listener.accept().await {
-                    if let Ok(mut unix_stream) = tokio::net::UnixStream::connect(&socket_path).await
-                    {
-                        tokio::spawn(async move {
-                            let _ =
-                                tokio::io::copy_bidirectional(&mut tcp_stream, &mut unix_stream)
-                                    .await;
-                        });
-                    }
-                }
-            });
-            proxy_tasks.push(proxy_task);
-        }
-    }
-
-    match std::process::Command::new(current_exe)
-        .arg("internal-launcher")
-        .arg(&manifest_json)
-        .stdout(std::process::Stdio::from(log_out))
-        .stderr(std::process::Stdio::from(log_err))
-        .spawn()
+    let app_name = manifest.app_name.clone();
     {
-        Ok(mut child) => {
-            let pid = child.id();
-            let app_name = manifest.app_name.clone();
-            map.insert(
-                app_name.clone(),
-                AppState {
-                    pid,
-                    manifest,
-                    start_time: chrono::Local::now(),
-                    log_file,
-                    proxy_tasks,
-                },
-            );
+        let mut map = state.lock().await;
+        if map.contains_key(&app_name) {
+            return Err("Already running".into());
+        }
 
-            let state_clone = state.clone();
-            tokio::spawn(async move {
-                let _ = tokio::task::spawn_blocking(move || child.wait()).await;
-                let mut map = state_clone.lock().await;
-                if let Some(app_state) = map.remove(&app_name) {
-                    for task in app_state.proxy_tasks {
-                        task.abort();
+        let log_dir = &format!(
+            "{}/logs",
+            std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string())
+        );
+        let log_file = format!("{}/{}.log", log_dir, app_name);
+
+        openback::dlog!("Daemon", "INFO", "Registering replica '{}' in state map (Building)", app_name);
+        map.insert(
+            app_name.clone(),
+            AppState {
+                pid: 0,
+                is_building: true, // Mark as building while overlay cache is generated
+                exit_code: None,
+                manifest: manifest.clone(),
+                start_time: chrono::Local::now(),
+                log_file,
+                stdin_fifo: None,
+                proxy_tasks: vec![],
+            },
+        );
+    }
+
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        // Step 1: Ensure base image and package overlay is built and cached
+        openback::dlog!("Daemon", "INFO", "[{}] Step 1: Ensuring base image '{}' is available...", app_name, manifest.get_base_image());
+        if let Err(e) = openback::engine::overlay::OverlayEngine::ensure_base_image(&manifest.get_base_image()).await {
+            openback::dlog!("Daemon", "ERROR", "[{}] ERROR: Failed to ensure base image: {}", manifest.app_name, e);
+            let mut map = state_clone.lock().await;
+            map.remove(&manifest.app_name);
+            return;
+        }
+        openback::dlog!("Daemon", "INFO", "[{}] Step 1 complete: Base image ready.", app_name);
+
+        openback::dlog!("Daemon", "INFO", "[{}] Step 2: Ensuring package overlay layer is built and cached...", app_name);
+        if let Err(e) = openback::engine::overlay::OverlayEngine::ensure_overlay(&manifest).await {
+            openback::dlog!("Daemon", "ERROR", "[{}] ERROR: Failed to ensure overlay: {}", manifest.app_name, e);
+            let mut map = state_clone.lock().await;
+            map.remove(&manifest.app_name);
+            return;
+        }
+        openback::dlog!("Daemon", "INFO", "[{}] Step 2 complete: Package overlay ready.", app_name);
+
+        // Step 3: Setup logs and proxy tasks
+        let log_dir = &format!(
+            "{}/logs",
+            std::env::var("OPENBACK_STORE_DIR").unwrap_or_else(|_| "/tmp/openback".to_string())
+        );
+        let _ = std::fs::create_dir_all(log_dir);
+        let log_file = format!("{}/{}.log", log_dir, manifest.app_name);
+        openback::dlog!("Daemon", "INFO", "[{}] Step 3: Log file -> {}", app_name, log_file);
+
+        let log_out = match std::fs::File::create(&log_file) {
+            Ok(f) => f,
+            Err(e) => {
+                openback::dlog!("Daemon", "ERROR", "[{}] ERROR: Failed to create log file: {}", app_name, e);
+                return;
+            }
+        };
+        let log_err = match log_out.try_clone() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+
+        let manifest_json = serde_json::to_string(&manifest).unwrap();
+        let current_exe = std::env::current_exe().unwrap_or_else(|_| "openback".into());
+
+        let mut proxy_tasks = Vec::new();
+        if let Some(networking) = &manifest.networking {
+            for port_mapping in &networking.ports {
+                let host_port = port_mapping.host_port;
+                let app_name_inner = manifest.app_name.clone();
+                let container_socket = port_mapping.container_socket.clone();
+
+                openback::dlog!("Daemon", "INFO", "[{}] Step 3: Binding TCP proxy on host port {} -> container socket {}", app_name, host_port, container_socket);
+                let tcp_listener =
+                    match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", host_port)).await {
+                        Ok(l) => l,
+                        Err(e) => {
+                            openback::dlog!("Daemon", "ERROR", "[{}] ERROR: Failed to bind TCP port {}: {}", app_name, host_port, e);
+                            return;
+                        }
+                    };
+
+                let proxy_task = tokio::spawn(async move {
+                    let socket_path = container_socket.replace(
+                        "/run",
+                        &format!(
+                            "{}/store/apps/{}/run",
+                            std::env::var("OPENBACK_STORE_DIR")
+                                .unwrap_or_else(|_| "/tmp/openback".to_string()),
+                            app_name_inner
+                        ),
+                    );
+                    while let Ok((mut tcp_stream, peer)) = tcp_listener.accept().await {
+                        openback::dlog!("Daemon", "INFO", "TCP proxy: new connection from {} for app '{}'", peer, app_name_inner);
+                        if let Ok(mut unix_stream) = tokio::net::UnixStream::connect(&socket_path).await
+                        {
+                            tokio::spawn(async move {
+                                let _ =
+                                    tokio::io::copy_bidirectional(&mut tcp_stream, &mut unix_stream)
+                                        .await;
+                            });
+                        } else {
+                            openback::dlog!("Daemon", "ERROR", "TCP proxy: failed to connect to container socket {}", socket_path);
+                        }
+                    }
+                });
+                proxy_tasks.push(proxy_task);
+            }
+        }
+
+        let fifo_path = format!("{}/{}.fifo", log_dir, app_name);
+        let _ = std::fs::remove_file(&fifo_path);
+        let _ = nix::unistd::mkfifo(
+            fifo_path.as_str(),
+            nix::sys::stat::Mode::from_bits_truncate(0o666),
+        );
+
+        // Step 4: Spawn the launcher process
+        openback::dlog!("Daemon", "INFO", "[{}] Step 4: Spawning internal-launcher subprocess...", app_name);
+        match std::process::Command::new(current_exe)
+            .arg("internal-launcher")
+            .arg(&manifest_json)
+            .env("OPENBACK_STDIN_FIFO", &fifo_path)
+            .stdout(std::process::Stdio::from(log_out))
+            .stderr(std::process::Stdio::from(log_err))
+            .spawn()
+        {
+            Ok(mut child) => {
+                let pid = child.id();
+                let app_name_inner = manifest.app_name.clone();
+                openback::dlog!("Daemon", "INFO", "[{}] Launcher PID {} spawned successfully. Transitioning to Running.", app_name, pid);
+
+                {
+                    let mut map = state_clone.lock().await;
+                    if let Some(app_state) = map.get_mut(&app_name_inner) {
+                        app_state.pid = pid;
+                        app_state.is_building = false; // Transition to Running
+                        app_state.stdin_fifo = Some(fifo_path.clone());
+                        app_state.proxy_tasks = proxy_tasks;
                     }
                 }
-            });
-            Ok(())
+
+                let state_clone2 = state_clone.clone();
+                let app_name_clone = app_name_inner.clone();
+                tokio::spawn(async move {
+                    let exit_status = tokio::task::spawn_blocking(move || child.wait()).await.unwrap();
+                    openback::dlog!("Daemon", "INFO", "Replica '{}' (PID {}) exited with status {:?}", app_name_clone, pid, exit_status);
+                    let mut map = state_clone2.lock().await;
+                    if let Some(app_state) = map.get_mut(&app_name_clone) {
+                        for task in app_state.proxy_tasks.drain(..) {
+                            task.abort();
+                        }
+                        app_state.exit_code = exit_status.ok().and_then(|s| s.code()).or(Some(-1));
+                        openback::dlog!("Daemon", "INFO", "Replica '{}' marked as Exited({}).", app_name_clone, app_state.exit_code.unwrap_or(-1));
+                        if let Some(fifo) = &app_state.stdin_fifo {
+                            let _ = std::fs::remove_file(fifo);
+                        }
+                    }
+                });
+            }
+            Err(e) => {
+                openback::dlog!("Daemon", "ERROR", "[{}] ERROR: Failed to spawn launcher: {}", manifest.app_name, e);
+                let mut map = state_clone.lock().await;
+                map.remove(&manifest.app_name);
+            }
         }
-        Err(e) => Err(e.to_string()),
-    }
+    });
+
+    Ok(())
 }
 
 async fn reconcile_deployment(
@@ -485,6 +643,9 @@ async fn reconcile_deployment(
                 base_image: kube_app.spec.base_image.clone(),
                 target_gd: kube_app.spec.target_gd.clone(),
                 dependencies: kube_app.spec.dependencies.clone(),
+                packages: kube_app.spec.packages.clone(),
+                app_source: kube_app.spec.app_source.clone(),
+                work_dir: kube_app.spec.work_dir.clone(),
                 permissions: kube_app.spec.permissions.clone(),
                 networking: kube_app.spec.networking.clone(),
                 env: kube_app.spec.env.clone().unwrap_or_default(),
@@ -516,7 +677,7 @@ async fn reconcile_deployment(
             if let (Some(ip), Some(p)) = (target_ip, target_port) {
                 if ip == "127.0.0.1"
                     || ip == "localhost"
-                    || ip == sysinfo::System::host_name().unwrap_or_default()
+                    || ip.starts_with(&sysinfo::System::host_name().unwrap_or_default())
                 {
                     let _ = spawn_replica(manifest, state.clone()).await;
                 } else {
@@ -535,27 +696,31 @@ async fn reconcile_deployment(
                         let _ =
                             tokio::io::AsyncWriteExt::write_all(&mut stream, payload.as_bytes())
                                 .await;
-                        println!("Dispatched replica {} to Node {}", replica_name, ip);
+                        openback::dlog!("Daemon", "INFO", "Dispatched replica {} to Node {}", replica_name, ip);
                         let mut map = state.lock().await;
                         map.insert(
                             replica_name.clone(),
                             AppState {
                                 pid: 0,
+                                is_building: false,
+                                exit_code: None,
                                 manifest: manifest.clone(),
                                 start_time: chrono::Local::now(),
                                 log_file: format!("Remote on {}", ip),
+                                stdin_fifo: None,
                                 proxy_tasks: vec![],
                             },
                         );
                     } else {
-                        eprintln!("Failed to dial Node {} for replica {}", ip, replica_name);
+                        openback::dlog!("Daemon", "ERROR", "Failed to dial Node {} for replica {}", ip, replica_name);
                     }
                 }
             } else {
                 // Fallback to local if no nodes available or registry empty
+                openback::dlog!("Daemon", "INFO", "No remote nodes available, spawning replica '{}' locally", replica_name);
                 let _ = spawn_replica(manifest, state.clone()).await;
                 println!(
-                    "No remote nodes available, spawned replica {} locally",
+                    "[Daemon] Spawned replica {} locally",
                     replica_name
                 );
             }
@@ -584,6 +749,7 @@ async fn handle_request(
     state: Arc<Mutex<HashMap<String, AppState>>>,
     registry: Arc<Mutex<HashMap<String, NodeStatus>>>,
 ) -> RpcResponse {
+    openback::dlog!("Daemon", "INFO", "Received RPC request: {:?}", std::mem::discriminant(&request));
     match request {
         openback::rpc::RpcRequest::GetNodes => {
             let mut nodes = Vec::new();
@@ -602,6 +768,20 @@ async fn handle_request(
                 });
             }
             RpcResponse::NodeList(nodes)
+        }
+        RpcRequest::Attach { app_name } => {
+            let map = state.lock().await;
+            if let Some(app_state) = map.get(&app_name) {
+                if app_state.is_building {
+                    return RpcResponse::Error("App is currently building its overlay".to_string());
+                }
+                if app_state.exit_code.is_some() {
+                    return RpcResponse::Error("App has already exited".to_string());
+                }
+                return RpcResponse::AttachStream;
+            } else {
+                return RpcResponse::Error(format!("App '{}' not found", app_name));
+            }
         }
         RpcRequest::Run(manifest) => {
             let mut map = state.lock().await;
@@ -679,9 +859,17 @@ async fn handle_request(
                 }
             }
 
+            let fifo_path = format!("{}/{}.fifo", log_dir, manifest.app_name);
+            let _ = std::fs::remove_file(&fifo_path);
+            let _ = nix::unistd::mkfifo(
+                fifo_path.as_str(),
+                nix::sys::stat::Mode::from_bits_truncate(0o666),
+            );
+
             match Command::new(current_exe)
                 .arg("internal-launcher")
                 .arg(&manifest_json)
+                .env("OPENBACK_STDIN_FIFO", &fifo_path)
                 .stdout(Stdio::from(log_out))
                 .stderr(Stdio::from(log_err))
                 .spawn()
@@ -698,9 +886,12 @@ async fn handle_request(
                         app_name.clone(),
                         AppState {
                             pid,
+                            is_building: false,
+                            exit_code: None,
                             manifest,
                             start_time: Local::now(),
                             log_file,
+                            stdin_fifo: Some(fifo_path.clone()),
                             proxy_tasks,
                         },
                     );
@@ -708,11 +899,14 @@ async fn handle_request(
                     let state_clone = state.clone();
                     tokio::spawn(async move {
                         let _ = tokio::task::spawn_blocking(move || child.wait()).await;
-                        println!("App '{}' exited. Cleaning up state.", app_name);
+                        openback::dlog!("Daemon", "INFO", "App '{}' exited. Cleaning up state.", app_name);
                         let mut map = state_clone.lock().await;
                         if let Some(app_state) = map.remove(&app_name) {
                             for task in app_state.proxy_tasks {
                                 task.abort();
+                            }
+                            if let Some(fifo) = &app_state.stdin_fifo {
+                                let _ = std::fs::remove_file(fifo);
                             }
                         }
                     });
@@ -729,7 +923,7 @@ async fn handle_request(
                 processes.push(ProcessInfo {
                     name: name.clone(),
                     pid: app_state.pid,
-                    status: "Running".to_string(),
+                    status: if let Some(code) = app_state.exit_code { format!("Exited ({})", code) } else if app_state.is_building { "Building".to_string() } else { "Running".to_string() },
                     start_time: app_state.start_time.format("%Y-%m-%d %H:%M:%S").to_string(),
                 });
             }
@@ -743,11 +937,11 @@ async fn handle_request(
                     task.abort();
                 }
 
-                if let Err(e) = signal::kill(Pid::from_raw(app_state.pid as i32), Signal::SIGKILL) {
-                    RpcResponse::Error(format!("Failed to kill process {}: {}", app_state.pid, e))
-                } else {
-                    RpcResponse::Ok(format!("App '{}' stopped", app_name))
+                if app_state.exit_code.is_none() && app_state.pid > 0 {
+                    let _ = signal::kill(Pid::from_raw(app_state.pid as i32), Signal::SIGKILL);
                 }
+                
+                RpcResponse::Ok(format!("App '{}' stopped", app_name))
             } else {
                 RpcResponse::Error(format!("App '{}' not found", app_name))
             }
@@ -1126,7 +1320,7 @@ async fn handle_request(
                                     .start_time
                                     .format("%Y-%m-%d %H:%M:%S")
                                     .to_string(),
-                                status: "Running".to_string(),
+                                status: if let Some(code) = app_state.exit_code { format!("Exited ({})", code) } else if app_state.is_building { "Building".to_string() } else { "Running".to_string() },
                             });
                         }
                     }
@@ -1149,7 +1343,7 @@ async fn handle_request(
             cpu_usage,
             ram_usage,
         } => {
-            println!("Node registered: {} ({}) at {:?}", hostname, role, port);
+            openback::dlog!("Daemon", "INFO", "Node registered: {} ({}) at {:?}", hostname, role, port);
             let mut reg = registry.lock().await;
             reg.insert(
                 hostname.clone(),
