@@ -4,10 +4,9 @@ use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use openback::manifest::AppManifest;
 use openback::rpc::{
-    AppDescription, BaseInfo, BaseManifest, DepInfo, KubeApplication, NodeInfo, ProcessInfo,
+    AppDescription, BaseInfo, BaseManifest, DepInfo, KubeApplication, ProcessInfo,
     RpcRequest, RpcResponse,
 };
-use rand::Rng;
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
@@ -95,7 +94,7 @@ pub async fn run_daemon(
 
     println!("OpenBack Daemon listening on {}", socket_path);
 
-    let role_clone = role.clone();
+    let _role_clone = role.clone();
     let cluster_token_clone = cluster_token.clone();
     let state_tcp = state.clone();
 
@@ -190,8 +189,7 @@ pub async fn run_daemon(
         });
     }
 
-    if port.is_some() {
-        let p = port.unwrap();
+    if let Some(p) = port {
         println!("OpenBack Daemon listening on TCP 0.0.0.0:{}", p);
         let tcp_listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", p)).await?;
 
@@ -468,7 +466,7 @@ async fn reconcile_deployment(
     let mut current_replicas = Vec::new();
     {
         let map = state.lock().await;
-        for (name, _) in map.iter() {
+        for name in map.keys() {
             if name.starts_with(&format!("{}-", app_name)) && name.len() == app_name.len() + 9 {
                 current_replicas.push(name.clone());
             }
@@ -564,8 +562,7 @@ async fn reconcile_deployment(
         }
     } else if current_replicas.len() > desired_replicas {
         let to_kill = current_replicas.len() - desired_replicas;
-        for i in 0..to_kill {
-            let name = &current_replicas[i];
+        for name in current_replicas.iter().take(to_kill) {
             let mut map = state.lock().await;
             if let Some(app_state) = map.remove(name) {
                 for task in app_state.proxy_tasks {
@@ -876,10 +873,8 @@ async fn handle_request(
                                             state.manifest.dependencies.contains(&full_dep_str)
                                         });
 
-                                        if !is_used {
-                                            if std::fs::remove_dir_all(sub_entry.path()).is_ok() {
-                                                pruned.push(full_dep_str);
-                                            }
+                                        if !is_used && std::fs::remove_dir_all(sub_entry.path()).is_ok() {
+                                            pruned.push(full_dep_str);
                                         }
                                     }
                                 }
@@ -1045,10 +1040,8 @@ async fn handle_request(
                                     .values()
                                     .any(|state| state.manifest.get_base_image() == base_name);
 
-                                if !is_used {
-                                    if std::fs::remove_dir_all(entry.path()).is_ok() {
-                                        pruned.push(base_name);
-                                    }
+                                if !is_used && std::fs::remove_dir_all(entry.path()).is_ok() {
+                                    pruned.push(base_name);
                                 }
                             }
                         }

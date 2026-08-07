@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use openback::manifest::{AppManifest, Networking, Permissions};
-use openback::rpc::{KubeApplication, ProcessInfo, RpcRequest, RpcResponse};
-use rand::Rng;
-use serde::{Deserialize, Serialize};
+use openback::rpc::{KubeApplication, RpcRequest, RpcResponse};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command as StdCommand;
