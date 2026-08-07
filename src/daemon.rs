@@ -4,8 +4,8 @@ use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use openback::manifest::AppManifest;
 use openback::rpc::{
-    AppDescription, BaseInfo, BaseManifest, DepInfo, KubeApplication, ProcessInfo,
-    RpcRequest, RpcResponse,
+    AppDescription, BaseInfo, BaseManifest, DepInfo, KubeApplication, ProcessInfo, RpcRequest,
+    RpcResponse,
 };
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -873,7 +873,9 @@ async fn handle_request(
                                             state.manifest.dependencies.contains(&full_dep_str)
                                         });
 
-                                        if !is_used && std::fs::remove_dir_all(sub_entry.path()).is_ok() {
+                                        if !is_used
+                                            && std::fs::remove_dir_all(sub_entry.path()).is_ok()
+                                        {
                                             pruned.push(full_dep_str);
                                         }
                                     }
