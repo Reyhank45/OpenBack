@@ -37,4 +37,4 @@ jobs:
       run: cargo build --verbose
 
     - name: Run tests (with sudo for namespace tests)
-      run: sudo env "PATH=$PATH" cargo test --verbose
+      run: sudo env "PATH=$PATH" "RUSTUP_HOME=$HOME/.rustup" "CARGO_HOME=$HOME/.cargo" cargo test --verbose
