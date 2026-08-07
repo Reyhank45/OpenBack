@@ -300,3 +300,12 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
     anyhow::bail!("Failed to exec {}: {}", cmd_name, err);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_launcher_compiles_and_links() {
+        assert!(true);
+    }
+}

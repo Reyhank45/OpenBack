@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    # Stop and disable the service before removal
+    systemctl stop openbackd.service || true
+    systemctl disable openbackd.service || true
+fi
+
+exit 0

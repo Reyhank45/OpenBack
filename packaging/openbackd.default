@@ -1,0 +1,10 @@
+# Default settings for openbackd. This file is sourced by systemd
+
+# Role of the node (master, slave, master-backup, slave-backup)
+OPENBACK_ROLE=master
+
+# Port to bind the daemon to
+OPENBACK_PORT=9820
+
+# Additional arguments (e.g. --cluster-token secret)
+# OPENBACK_EXTRA_ARGS=""

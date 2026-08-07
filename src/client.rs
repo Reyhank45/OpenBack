@@ -197,3 +197,46 @@ pub async fn base_prune() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::UnixListener;
+    use tokio::io::AsyncWriteExt;
+    
+    #[tokio::test]
+    async fn test_ps_client_parsing() {
+        let socket_path = "/tmp/openbackd_test_ps.sock";
+        let _ = std::fs::remove_file(socket_path);
+        std::env::set_var("OPENBACK_SOCKET", socket_path);
+
+        let listener = UnixListener::bind(socket_path).unwrap();
+        
+        // Spawn mock server
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            
+            // Send back a mock RpcResponse::ProcessList
+            let mock_response = openback::rpc::RpcResponse::ProcessList(vec![
+                openback::rpc::ProcessInfo {
+                    name: "test-app".to_string(),
+                    pid: 1234,
+                    status: "running".to_string(),
+                    start_time: "2026-08-07T00:00:00Z".to_string(),
+                }
+            ]);
+            let mut response_json = serde_json::to_string(&mock_response).unwrap();
+            response_json.push('\n');
+            stream.write_all(response_json.as_bytes()).await.unwrap();
+        });
+
+        // Run the client function, which will hit the mock server.
+        // ps() prints to stdout, so we just check it doesn't error.
+        let res = ps().await;
+        assert!(res.is_ok());
+        let _ = std::fs::remove_file(socket_path);
+    }
+}

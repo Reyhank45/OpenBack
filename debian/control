@@ -1,0 +1,16 @@
+Source: openback
+Section: net
+Priority: optional
+Maintainer: OpenBack Maintainer <wiratamareyhan85@gmail.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc
+Standards-Version: 4.7.4
+Homepage: https://github.com/reyhank45/openback
+Vcs-Browser: https://github.com/reyhank45/openback
+Vcs-Git: https://github.com/reyhank45/openback.git
+
+Package: openback
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: OpenBack Orchestrator and CLI
+ A multi-node distributed container orchestrator.
+ Includes the openbackd daemon and backcli tool.

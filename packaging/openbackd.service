@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenBack Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/default/openbackd
+ExecStart=/usr/bin/openback daemon --role ${OPENBACK_ROLE} --port ${OPENBACK_PORT} $OPENBACK_EXTRA_ARGS
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

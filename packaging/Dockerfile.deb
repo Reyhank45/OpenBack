@@ -1,0 +1,39 @@
+FROM rust:1.80-bullseye
+
+# Install packaging tools
+RUN apt-get update && apt-get install -y dpkg-dev fakeroot build-essential
+
+# Set up working directory
+WORKDIR /usr/src/openback
+
+# Copy source code
+COPY . .
+
+# Build release binaries
+RUN cargo build --release
+
+# Set up Debian package structure
+RUN mkdir -p /tmp/deb/openback_0.1.0_amd64/DEBIAN \
+             /tmp/deb/openback_0.1.0_amd64/usr/bin \
+             /tmp/deb/openback_0.1.0_amd64/lib/systemd/system \
+             /tmp/deb/openback_0.1.0_amd64/etc/default
+
+# Copy package control files and set permissions
+COPY packaging/DEBIAN/* /tmp/deb/openback_0.1.0_amd64/DEBIAN/
+RUN chmod 0755 /tmp/deb/openback_0.1.0_amd64/DEBIAN/postinst \
+               /tmp/deb/openback_0.1.0_amd64/DEBIAN/prerm \
+               /tmp/deb/openback_0.1.0_amd64/DEBIAN/postrm
+
+# Copy binaries
+RUN cp target/release/openback target/release/backcli /tmp/deb/openback_0.1.0_amd64/usr/bin/
+
+# Copy systemd service and defaults
+RUN cp packaging/openbackd.service /tmp/deb/openback_0.1.0_amd64/lib/systemd/system/
+RUN cp packaging/openbackd.default /tmp/deb/openback_0.1.0_amd64/etc/default/openbackd
+
+# Build the Debian package
+WORKDIR /tmp/deb
+RUN dpkg-deb --build openback_0.1.0_amd64
+
+# Keep container running to copy output (entrypoint override in script)
+CMD ["sleep", "infinity"]

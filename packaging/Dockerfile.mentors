@@ -1,0 +1,13 @@
+FROM rust:1.80-bullseye
+
+# Install packaging tools
+RUN apt-get update && apt-get install -y dpkg-dev fakeroot debhelper dput gnupg
+
+# Set up working directory
+WORKDIR /usr/src/openback
+
+# Copy source code
+COPY . .
+
+# Run the upload script
+CMD ["/usr/src/openback/packaging/docker_entrypoint.sh"]

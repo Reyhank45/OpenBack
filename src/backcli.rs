@@ -287,3 +287,29 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_parsing() {
+        let args = vec!["backcli", "get", "apps"];
+        let cli = Cli::parse_from(args);
+        match cli.command {
+            Commands::Get { resource } => assert_eq!(resource, "apps"),
+            _ => panic!("Expected Get command"),
+        }
+
+        let args2 = vec!["backcli", "scale", "app", "test-app", "--replicas", "3"];
+        let cli2 = Cli::parse_from(args2);
+        match cli2.command {
+            Commands::Scale { resource, name, replicas } => {
+                assert_eq!(resource, "app");
+                assert_eq!(name, "test-app");
+                assert_eq!(replicas, 3);
+            },
+            _ => panic!("Expected Scale command"),
+        }
+    }
+}

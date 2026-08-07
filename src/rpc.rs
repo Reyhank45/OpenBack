@@ -129,3 +129,38 @@ pub enum RpcResponse {
     NodeList(Vec<NodeInfo>),
     LogLines(Vec<String>),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rpc_request_serialization() {
+        let req = RpcRequest::Ps;
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, "\"Ps\"");
+
+        let req = RpcRequest::Stop("app1".to_string());
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(json, "{\"Stop\":\"app1\"}");
+    }
+
+    #[test]
+    fn test_kube_application_deserialization() {
+        let json = r#"{
+            "apiVersion": "v1",
+            "kind": "Application",
+            "metadata": { "name": "test-app" },
+            "spec": {
+                "baseImage": "alpine",
+                "replicas": 3
+            }
+        }"#;
+        let app: KubeApplication = serde_json::from_str(json).unwrap();
+        assert_eq!(app.api_version, "v1");
+        assert_eq!(app.kind, "Application");
+        assert_eq!(app.metadata.name, "test-app");
+        assert_eq!(app.spec.base_image, Some("alpine".to_string()));
+        assert_eq!(app.spec.replicas, Some(3));
+    }
+}

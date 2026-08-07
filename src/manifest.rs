@@ -49,3 +49,66 @@ impl AppManifest {
         "openback-gd-v1".to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_manifest_deserialization() {
+        let data = json!({
+            "app_name": "test-app",
+            "base_image": "test-base",
+            "dependencies": ["lib1", "lib2"],
+            "entrypoint": ["/bin/sh"]
+        });
+
+        let manifest: AppManifest = serde_json::from_value(data).unwrap();
+        assert_eq!(manifest.app_name, "test-app");
+        assert_eq!(manifest.base_image, Some("test-base".to_string()));
+        assert_eq!(manifest.dependencies, vec!["lib1", "lib2"]);
+        assert_eq!(manifest.entrypoint, vec!["/bin/sh"]);
+        assert!(manifest.permissions.is_none());
+        assert!(manifest.networking.is_none());
+    }
+
+    #[test]
+    fn test_get_base_image() {
+        let manifest_with_base = AppManifest {
+            app_name: "test".to_string(),
+            base_image: Some("custom-base".to_string()),
+            target_gd: Some("ignored-gd".to_string()),
+            dependencies: vec![],
+            permissions: None,
+            networking: None,
+            env: HashMap::new(),
+            entrypoint: vec![],
+        };
+        assert_eq!(manifest_with_base.get_base_image(), "custom-base");
+
+        let manifest_with_gd = AppManifest {
+            app_name: "test".to_string(),
+            base_image: None,
+            target_gd: Some("gd-image".to_string()),
+            dependencies: vec![],
+            permissions: None,
+            networking: None,
+            env: HashMap::new(),
+            entrypoint: vec![],
+        };
+        assert_eq!(manifest_with_gd.get_base_image(), "gd-image");
+
+        let manifest_default = AppManifest {
+            app_name: "test".to_string(),
+            base_image: None,
+            target_gd: None,
+            dependencies: vec![],
+            permissions: None,
+            networking: None,
+            env: HashMap::new(),
+            entrypoint: vec![],
+        };
+        assert_eq!(manifest_default.get_base_image(), "openback-gd-v1");
+    }
+}
