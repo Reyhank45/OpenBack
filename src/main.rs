@@ -99,7 +99,12 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Daemon { role, port, master_addr, cluster_token } => {
+        Commands::Daemon {
+            role,
+            port,
+            master_addr,
+            cluster_token,
+        } => {
             daemon::run_daemon(role, port, master_addr, cluster_token).await?;
         }
         Commands::Run { manifest_path } => {
@@ -117,21 +122,17 @@ async fn main() -> anyhow::Result<()> {
         Commands::InternalLauncher { manifest_json } => {
             launcher::launch_container(manifest_json)?;
         }
-        Commands::Deps { action } => {
-            match action {
-                DepsCommand::List => client::deps_list().await?,
-                DepsCommand::Inspect { name } => client::deps_inspect(name).await?,
-                DepsCommand::Prune => client::deps_prune().await?,
-                DepsCommand::Remove { name, force } => client::deps_remove(name, force).await?,
-            }
-        }
-        Commands::Base { action } => {
-            match action {
-                BaseCommand::List => client::base_list().await?,
-                BaseCommand::Inspect { name } => client::base_inspect(name).await?,
-                BaseCommand::Prune => client::base_prune().await?,
-            }
-        }
+        Commands::Deps { action } => match action {
+            DepsCommand::List => client::deps_list().await?,
+            DepsCommand::Inspect { name } => client::deps_inspect(name).await?,
+            DepsCommand::Prune => client::deps_prune().await?,
+            DepsCommand::Remove { name, force } => client::deps_remove(name, force).await?,
+        },
+        Commands::Base { action } => match action {
+            BaseCommand::List => client::base_list().await?,
+            BaseCommand::Inspect { name } => client::base_inspect(name).await?,
+            BaseCommand::Prune => client::base_prune().await?,
+        },
     }
 
     Ok(())

@@ -15,18 +15,37 @@ pub enum RpcRequest {
     DepsList,
     DepsInspect(String),
     DepsPrune,
-    DepsRemove { name: String, force: bool },
+    DepsRemove {
+        name: String,
+        force: bool,
+    },
     BaseList,
     BaseInspect(String),
     BasePrune,
     Apply(KubeApplication),
     GetDeployment(String),
-    Scale { app_name: String, replicas: usize },
+    Scale {
+        app_name: String,
+        replicas: usize,
+    },
     Describe(String),
-    Logs { app_name: String, tail: Option<usize> },
+    Logs {
+        app_name: String,
+        tail: Option<usize>,
+    },
     GetNodes,
-    RegisterNode { role: String, hostname: String, port: Option<u16>, cpu_usage: f32, ram_usage: f32 },
-    Heartbeat { hostname: String, cpu_usage: f32, ram_usage: f32 },
+    RegisterNode {
+        role: String,
+        hostname: String,
+        port: Option<u16>,
+        cpu_usage: f32,
+        ram_usage: f32,
+    },
+    Heartbeat {
+        hostname: String,
+        cpu_usage: f32,
+        ram_usage: f32,
+    },
     SyncState(KubeApplication),
 }
 
