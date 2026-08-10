@@ -10,9 +10,25 @@ spec:
   workDir: /app
   replicas: 1
   entrypoint:
-    - python3
+    - sh
     - -c
-    - "import http.server, socketserver; print('Alpine Python Hello World serving on port 8082'); socketserver.TCPServer(('', 8082), http.server.SimpleHTTPRequestHandler).serve_forever()"
+    - |
+      cat << 'INNER_EOF' > /tmp/server.py
+      import socket, http.server, socketserver, os
+      s = os.environ.get('OPENBACK_IPC_SOCKET', '/run/app.sock')
+      if os.path.exists(s): os.remove(s)
+      class H(http.server.SimpleHTTPRequestHandler):
+          def address_string(self): return "unix"
+          def do_GET(self):
+              self.send_response(200)
+              self.send_header('Content-type','text/plain')
+              self.end_headers()
+              self.wfile.write(b'Hello World from Alpine Python!')
+      server = socketserver.UnixStreamServer(s, H)
+      print('Serving on', s)
+      server.serve_forever()
+      INNER_EOF
+      python3 -u /tmp/server.py
   networking:
     ipc_socket: /run/app.sock
     ports:
