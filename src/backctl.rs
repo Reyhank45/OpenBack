@@ -56,8 +56,7 @@ enum Commands {
     Ps,
     /// Remove a stopped container from the engine
     Rm {
-        app_name: String,
-        instance_id: String,
+        container_name: String,
     },
 }
 
@@ -140,26 +139,17 @@ async fn apply(file_path: PathBuf) -> Result<()> {
 
 async fn get_apps(all: bool) -> Result<()> {
     match send_engine_request(EngineRequest::Ps { all }).await? {
-        EngineResponse::AppList(apps) => {
+        EngineResponse::ContainerList(containers) => {
             println!(
-                "{:<25} | {:<15} | {:<15} | {:<10}",
-                "APPLICATION", "INSTANCE ID", "STATUS", "PID"
+                "{:<25} | {:<15} | {:<10}",
+                "CONTAINER NAME", "STATUS", "PID"
             );
-            println!("{:-<25}-+-{:-<15}-+-{:-<15}-+-{:-<10}", "", "", "", "");
-            for app in apps {
-                if app.instances.is_empty() {
-                    println!(
-                        "{:<25} | {:<15} | {:<15} | {:<10}",
-                        app.app_name, "<none>", "-", "-"
-                    );
-                } else {
-                    for inst in app.instances {
-                        println!(
-                            "{:<25} | {:<15} | {:<15} | {:<10}",
-                            app.app_name, inst.instance_id, inst.status, inst.pid
-                        );
-                    }
-                }
+            println!("{:-<25}-+-{:-<15}-+-{:-<10}", "", "", "");
+            for c in containers {
+                println!(
+                    "{:<25} | {:<15} | {:<10}",
+                    c.container_name, c.status, c.pid
+                );
             }
         }
         EngineResponse::Error(err) => eprintln!("Error: {}", err),
@@ -177,10 +167,9 @@ async fn delete_app(app_name: String) -> Result<()> {
     Ok(())
 }
 
-async fn rm_container(app_name: String, instance_id: String) -> Result<()> {
+async fn rm_container(container_name: String) -> Result<()> {
     match send_engine_request(EngineRequest::Rm {
-        app_name,
-        instance_id,
+        container_name,
     })
     .await?
     {
@@ -274,10 +263,9 @@ async fn describe_app(app_name: String) -> Result<()> {
     Ok(())
 }
 
-async fn logs_app(app_name: String, tail: Option<usize>) -> Result<()> {
+async fn logs_app(container_name: String, tail: Option<usize>) -> Result<()> {
     match send_engine_request(EngineRequest::Logs {
-        app_name,
-        instance_id: None,
+        container_name,
         tail,
     })
     .await?
@@ -352,14 +340,14 @@ async fn get_nodes() -> Result<()> {
     Ok(())
 }
 
-async fn attach_app(app_name: String) -> Result<()> {
+async fn attach_app(container_name: String) -> Result<()> {
     let socket_path =
         &std::env::var("OPENBACK_SOCKET").unwrap_or_else(|_| "/tmp/openbackd.sock".to_string());
     let mut stream = UnixStream::connect(socket_path)
         .await
         .with_context(|| format!("Failed to connect to daemon at {}", socket_path))?;
 
-    let request = EngineRequest::Attach { app_name };
+    let request = EngineRequest::Attach { container_name };
     let envelope = EngineEnvelope {
         auth_token: None,
         request,
@@ -483,10 +471,9 @@ async fn main() -> Result<()> {
             attach_app(name).await?;
         }
         Commands::Rm {
-            app_name,
-            instance_id,
+            container_name,
         } => {
-            rm_container(app_name, instance_id).await?;
+            rm_container(container_name).await?;
         }
     }
     Ok(())

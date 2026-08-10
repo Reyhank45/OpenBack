@@ -54,24 +54,17 @@ pub async fn run_app(manifest_path: PathBuf) -> Result<()> {
 
 pub async fn ps(all: bool) -> Result<()> {
     match send_rpc_request(EngineRequest::Ps { all }).await? {
-        EngineResponse::AppList(apps) => {
+        EngineResponse::ContainerList(containers) => {
             println!(
                 "{:<40} | {:<10} | {:<10} | {:<25}",
                 "APP NAME", "PID", "STATUS", "START TIME"
             );
             println!("{:-<40}-+-{:-<10}-+-{:-<10}-+-{:-<25}", "", "", "", "");
-            for app in apps {
-                for p in app.instances {
-                    let full_name = if p.instance_id.is_empty() || app.app_name == p.instance_id {
-                        app.app_name.clone()
-                    } else {
-                        format!("{}-{}", app.app_name, p.instance_id)
-                    };
-                    println!(
-                        "{:<40} | {:<10} | {:<10} | {:<25}",
-                        full_name, p.pid, p.status, p.start_time
-                    );
-                }
+            for c in containers {
+                println!(
+                    "{:<40} | {:<10} | {:<10} | {:<25}",
+                    c.container_name, c.pid, c.status, c.start_time
+                );
             }
         }
         EngineResponse::Error(err) => eprintln!("Error: {}", err),
@@ -81,16 +74,8 @@ pub async fn ps(all: bool) -> Result<()> {
 }
 
 pub async fn stop(container_name: String) -> Result<()> {
-    let (app_name, instance_id) = match container_name.rfind('-') {
-        Some(pos) => (
-            container_name[..pos].to_string(),
-            Some(container_name[pos + 1..].to_string()),
-        ),
-        None => (container_name, None),
-    };
     match send_rpc_request(EngineRequest::Stop {
-        app_name,
-        instance_id,
+        container_name: Some(container_name),
     })
     .await?
     {
@@ -102,16 +87,8 @@ pub async fn stop(container_name: String) -> Result<()> {
 }
 
 pub async fn start(container_name: String) -> Result<()> {
-    let (app_name, instance_id) = match container_name.rfind('-') {
-        Some(pos) => (
-            container_name[..pos].to_string(),
-            container_name[pos + 1..].to_string(),
-        ),
-        None => (container_name.clone(), container_name.clone()),
-    };
     match send_rpc_request(EngineRequest::Start {
-        app_name,
-        instance_id,
+        container_name,
     })
     .await?
     {
@@ -123,16 +100,8 @@ pub async fn start(container_name: String) -> Result<()> {
 }
 
 pub async fn rm(container_name: String) -> Result<()> {
-    let (app_name, instance_id) = match container_name.rfind('-') {
-        Some(pos) => (
-            container_name[..pos].to_string(),
-            container_name[pos + 1..].to_string(),
-        ),
-        None => (container_name.clone(), container_name.clone()),
-    };
     match send_rpc_request(EngineRequest::Rm {
-        app_name,
-        instance_id,
+        container_name,
     })
     .await?
     {
@@ -144,16 +113,8 @@ pub async fn rm(container_name: String) -> Result<()> {
 }
 
 pub async fn logs(container_name: String) -> Result<()> {
-    let (app_name, instance_id) = match container_name.rfind('-') {
-        Some(pos) => (
-            container_name[..pos].to_string(),
-            Some(container_name[pos + 1..].to_string()),
-        ),
-        None => (container_name, None),
-    };
     match send_rpc_request(EngineRequest::Logs {
-        app_name,
-        instance_id,
+        container_name,
         tail: None,
     })
     .await?
@@ -173,10 +134,10 @@ pub async fn deps_list() -> Result<()> {
     match send_rpc_request(EngineRequest::DepsList).await? {
         EngineResponse::DepsList(deps) => {
             println!(
-                "{:<30} | {:<15} | {:<10} | {:<30}",
-                "DEPENDENCY", "VERSION", "SIZE (MB)", "ACTIVE CONSUMERS"
+                "{:<30} | {:<15} | {:<25} | {:<10} | {:<30}",
+                "DEPENDENCY", "VERSION", "TARGET", "SIZE (MB)", "ACTIVE CONSUMERS"
             );
-            println!("{:-<30}-+-{:-<15}-+-{:-<10}-+-{:-<30}", "", "", "", "");
+            println!("{:-<30}-+-{:-<15}-+-{:-<25}-+-{:-<10}-+-{:-<30}", "", "", "", "", "");
             for d in deps {
                 let size_mb = d.size_bytes as f64 / 1_048_576.0;
                 let consumers_str = if d.consumers.is_empty() {
@@ -184,9 +145,14 @@ pub async fn deps_list() -> Result<()> {
                 } else {
                     format!("{} ({})", d.consumers.len(), d.consumers.join(", "))
                 };
+                let target = format!("{}/{}/{}", 
+                    d.target_os.unwrap_or_else(|| "unknown".to_string()),
+                    d.target_libc.unwrap_or_else(|| "unknown".to_string()),
+                    d.target_arch.unwrap_or_else(|| "unknown".to_string())
+                );
                 println!(
-                    "{:<30} | {:<15} | {:<10.2} | {:<30}",
-                    d.name, d.version, size_mb, consumers_str
+                    "{:<30} | {:<15} | {:<25} | {:<10.2} | {:<30}",
+                    d.name, &d.version[..std::cmp::min(12, d.version.len())], target, size_mb, consumers_str
                 );
             }
         }
@@ -239,11 +205,11 @@ pub async fn base_list() -> Result<()> {
     match send_rpc_request(EngineRequest::BaseList).await? {
         EngineResponse::BaseList(bases) => {
             println!(
-                "{:<25} | {:<10} | {:<10} | {:<10} | {:<15} | {:<25}",
+                "{:<30} | {:<10} | {:<10} | {:<10} | {:<15} | {:<30}",
                 "BASE NAME", "OS", "LIBC", "ARCH", "SIZE (MB)", "ACTIVE CONSUMERS"
             );
             println!(
-                "{:-<25}-+-{:-<10}-+-{:-<10}-+-{:-<10}-+-{:-<15}-+-{:-<25}",
+                "{:-<30}-+-{:-<10}-+-{:-<10}-+-{:-<10}-+-{:-<15}-+-{:-<30}",
                 "", "", "", "", "", ""
             );
             for b in bases {
@@ -265,7 +231,7 @@ pub async fn base_list() -> Result<()> {
                 };
 
                 println!(
-                    "{:<25} | {:<10} | {:<10} | {:<10} | {:<15.2} | {:<25}",
+                    "{:<30} | {:<10} | {:<10} | {:<10} | {:<15.2} | {:<30}",
                     b.name, os, libc, arch, size_mb, consumers_str
                 );
             }

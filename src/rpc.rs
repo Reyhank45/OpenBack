@@ -14,16 +14,13 @@ pub enum EngineRequest {
         all: bool,
     },
     Start {
-        app_name: String,
-        instance_id: String,
+        container_name: String,
     },
     Stop {
-        app_name: String,
-        instance_id: Option<String>,
+        container_name: Option<String>,
     },
     Rm {
-        app_name: String,
-        instance_id: String,
+        container_name: String,
     },
     DepsList,
     DepsInspect(String),
@@ -36,13 +33,12 @@ pub enum EngineRequest {
     BaseInspect(String),
     BasePrune,
     Logs {
-        app_name: String,
-        instance_id: Option<String>,
+        container_name: String,
         tail: Option<usize>,
     },
     /// Attach to a running replica — stream log output and forward stdin.
     Attach {
-        app_name: String,
+        container_name: String,
     },
 }
 
@@ -132,7 +128,7 @@ pub struct NodeInfo {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppDescription {
     pub deployment: KubeApplication,
-    pub replicas: Vec<InstanceInfo>,
+    pub replicas: Vec<ContainerInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -152,17 +148,11 @@ pub struct BaseInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct InstanceInfo {
-    pub instance_id: String,
+pub struct ContainerInfo {
+    pub container_name: String,
     pub pid: u32,
     pub status: String,
     pub start_time: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AppInfo {
-    pub app_name: String,
-    pub instances: Vec<InstanceInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -172,13 +162,19 @@ pub struct DepInfo {
     pub size_bytes: u64,
     pub consumers: Vec<String>,
     pub created_time: Option<String>,
+    #[serde(default)]
+    pub target_os: Option<String>,
+    #[serde(default)]
+    pub target_libc: Option<String>,
+    #[serde(default)]
+    pub target_arch: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum EngineResponse {
     Ok(String),
     Error(String),
-    AppList(Vec<AppInfo>),
+    ContainerList(Vec<ContainerInfo>),
     DepsList(Vec<DepInfo>),
     DepDetails(DepInfo),
     PruneResult(Vec<String>),

@@ -167,8 +167,8 @@ async fn handle_cluster_request(req: ClusterRequest, etcd: &mut Client) -> Clust
                     if parts.len() == 5 {
                         let replica_name = parts[4];
                         if replica_name.starts_with(&name) {
-                            instances.push(openback::rpc::InstanceInfo {
-                                instance_id: replica_name.to_string(),
+                            instances.push(openback::rpc::ContainerInfo {
+                                container_name: replica_name.to_string(),
                                 pid: 0,
                                 status: "Assigned".to_string(),
                                 start_time: "-".to_string(),
@@ -274,15 +274,12 @@ async fn run_node_agent(mut etcd: Client, hostname: String) {
 
         // 3. Fetch Actual running instances from Engine
         let mut actual_replicas = HashMap::new();
-        if let Ok(EngineResponse::AppList(apps)) =
+        if let Ok(EngineResponse::ContainerList(containers)) =
             send_engine_request(EngineRequest::Ps { all: true }).await
         {
-            for app in apps {
-                for inst in app.instances {
-                    if inst.status != "Exited" && !inst.status.starts_with("Exited") {
-                        let full_name = format!("{}-{}", app.app_name, inst.instance_id);
-                        actual_replicas.insert(full_name, inst);
-                    }
+            for c in containers {
+                if c.status != "Exited" && !c.status.starts_with("Exited") {
+                    actual_replicas.insert(c.container_name.clone(), c);
                 }
             }
         }
@@ -324,28 +321,15 @@ async fn run_node_agent(mut etcd: Client, hostname: String) {
                     replica_name
                 );
 
-                // Parse app_name and instance_id
-                let (app_name, instance_id) = match replica_name.rfind('-') {
-                    Some(pos) => (
-                        replica_name[..pos].to_string(),
-                        Some(replica_name[pos + 1..].to_string()),
-                    ),
-                    None => (replica_name.clone(), None),
-                };
-
                 let _ = send_engine_request(EngineRequest::Stop {
-                    app_name: app_name.clone(),
-                    instance_id: instance_id.clone(),
+                    container_name: Some(replica_name.clone()),
                 })
                 .await;
 
-                if let Some(iid) = instance_id {
-                    let _ = send_engine_request(EngineRequest::Rm {
-                        app_name,
-                        instance_id: iid,
-                    })
-                    .await;
-                }
+                let _ = send_engine_request(EngineRequest::Rm {
+                    container_name: replica_name.clone(),
+                })
+                .await;
             }
         }
     }

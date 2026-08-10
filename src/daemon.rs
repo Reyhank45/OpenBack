@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 
-pub struct InstanceState {
+pub struct ContainerState {
     pub pid: u32,
     pub is_building: bool,
     pub exit_code: Option<i32>,
@@ -21,10 +21,6 @@ pub struct InstanceState {
     pub log_file: String,
     pub stdin_fifo: Option<String>,
     pub proxy_tasks: Vec<tokio::task::JoinHandle<()>>,
-}
-
-pub struct ApplicationState {
-    pub instances: HashMap<String, InstanceState>,
 }
 
 fn get_dir_size(path: &std::path::Path) -> std::io::Result<u64> {
@@ -56,7 +52,7 @@ pub async fn run_daemon(port: Option<u16>) -> Result<()> {
     std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o777))
         .context("Failed to set socket permissions")?;
 
-    let state: Arc<Mutex<HashMap<String, ApplicationState>>> = Arc::new(Mutex::new(HashMap::new()));
+    let state: Arc<Mutex<HashMap<String, ContainerState>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // Synchronous Recovery blocks the thread
     recover_containers(state.clone()).await;
@@ -158,8 +154,8 @@ pub async fn run_daemon(port: Option<u16>) -> Result<()> {
                         }
 
                         if matches!(response, EngineResponse::AttachStream) {
-                            if let Some(EngineRequest::Attach { app_name }) = request_clone {
-                                handle_attach_stream(app_name, state.clone(), buf_reader, writer)
+                            if let Some(EngineRequest::Attach { container_name }) = request_clone {
+                                handle_attach_stream(container_name, state.clone(), buf_reader, writer)
                                     .await;
                             }
                         }
@@ -172,22 +168,15 @@ pub async fn run_daemon(port: Option<u16>) -> Result<()> {
 }
 
 async fn handle_attach_stream(
-    app_name: String,
-    state: Arc<tokio::sync::Mutex<HashMap<String, ApplicationState>>>,
+    container_name: String,
+    state: Arc<tokio::sync::Mutex<HashMap<String, ContainerState>>>,
     mut buf_reader: BufReader<tokio::net::unix::ReadHalf<'_>>,
     mut writer: tokio::net::unix::WriteHalf<'_>,
 ) {
     let (log_file, stdin_fifo) = {
         let map = state.lock().await;
-        if let Some(app) = map.get(&app_name) {
-            let mut running = None;
-            for inst in app.instances.values() {
-                if inst.exit_code.is_none() && !inst.is_building {
-                    running = Some(inst);
-                    break;
-                }
-            }
-            if let Some(inst) = running {
+        if let Some(inst) = map.get(&container_name) {
+            if inst.exit_code.is_none() && !inst.is_building {
                 (inst.log_file.clone(), inst.stdin_fifo.clone())
             } else {
                 return;
@@ -244,7 +233,7 @@ async fn handle_attach_stream(
 }
 
 async fn recover_containers(
-    state: Arc<tokio::sync::Mutex<std::collections::HashMap<String, ApplicationState>>>,
+    state: Arc<tokio::sync::Mutex<std::collections::HashMap<String, ContainerState>>>,
 ) {
     let store_dir = std::env::var("OPENBACK_STORE_DIR")
         .unwrap_or_else(|_| "/var/lib/openback/store".to_string());
@@ -314,13 +303,7 @@ async fn recover_containers(
                                         .map(|dt| dt.with_timezone(&chrono::Local))
                                         .unwrap_or_else(|_| chrono::Local::now());
 
-                                let (app_name, instance_id) = match replica_name.rfind('-') {
-                                    Some(pos) => (
-                                        replica_name[..pos].to_string(),
-                                        replica_name[pos + 1..].to_string(),
-                                    ),
-                                    None => (replica_name.clone(), replica_name.clone()),
-                                };
+
 
                                 let log_dir = format!("{}/logs", store_dir);
                                 let log_file = format!("{}/{}.log", log_dir, replica_name);
@@ -386,8 +369,6 @@ async fn recover_containers(
 
                                 let state_clone2 = state.clone();
                                 let replica_name_clone = replica_name.clone();
-                                let app_name_clone = app_name.clone();
-                                let instance_id_clone = instance_id.clone();
                                 let fifo_path_clone = fifo_path.clone();
                                 tokio::spawn(async move {
                                     let owned_fd =
@@ -399,31 +380,24 @@ async fn recover_containers(
                                     openback::dlog!(
                                         "Daemon",
                                         "INFO",
-                                        "Recovered replica '{}' (PID {}) exited",
+                                        "Recovered container '{}' (PID {}) exited",
                                         replica_name_clone,
                                         pid
                                     );
                                     let mut map = state_clone2.lock().await;
-                                    if let Some(app_state) = map.get_mut(&app_name_clone) {
-                                        if let Some(inst) =
-                                            app_state.instances.get_mut(&instance_id_clone)
-                                        {
-                                            for task in inst.proxy_tasks.drain(..) {
-                                                task.abort();
-                                            }
-                                            inst.exit_code = Some(-1);
-                                            let _ = std::fs::remove_file(&fifo_path_clone);
+                                    if let Some(inst) = map.get_mut(&replica_name_clone) {
+                                        for task in inst.proxy_tasks.drain(..) {
+                                            task.abort();
                                         }
+                                        inst.exit_code = Some(-1);
+                                        let _ = std::fs::remove_file(&fifo_path_clone);
                                     }
                                 });
 
                                 let mut map = state.lock().await;
-                                let app = map.entry(app_name).or_insert_with(|| ApplicationState {
-                                    instances: std::collections::HashMap::new(),
-                                });
-                                app.instances.insert(
-                                    instance_id,
-                                    InstanceState {
+                                map.insert(
+                                    replica_name.clone(),
+                                    ContainerState {
                                         pid,
                                         is_building: false,
                                         exit_code: None,
@@ -453,21 +427,10 @@ async fn recover_containers(
                                         chrono::DateTime::parse_from_rfc3339(start_time_str.trim())
                                             .map(|dt| dt.with_timezone(&chrono::Local))
                                             .unwrap_or_else(|_| chrono::Local::now());
-                                    let (app_name, instance_id) = match replica_name.rfind('-') {
-                                        Some(pos) => (
-                                            replica_name[..pos].to_string(),
-                                            replica_name[pos + 1..].to_string(),
-                                        ),
-                                        None => (replica_name.clone(), replica_name.clone()),
-                                    };
                                     let mut map = state.lock().await;
-                                    let app =
-                                        map.entry(app_name).or_insert_with(|| ApplicationState {
-                                            instances: std::collections::HashMap::new(),
-                                        });
-                                    app.instances.insert(
-                                        instance_id,
-                                        InstanceState {
+                                    map.insert(
+                                        replica_name.clone(),
+                                        ContainerState {
                                             manifest,
                                             pid: 0,
                                             start_time,
@@ -498,25 +461,14 @@ async fn recover_containers(
 
 async fn spawn_replica(
     manifest: openback::manifest::AppManifest,
-    state: Arc<tokio::sync::Mutex<std::collections::HashMap<String, ApplicationState>>>,
+    state: Arc<tokio::sync::Mutex<std::collections::HashMap<String, ContainerState>>>,
 ) -> Result<(), String> {
     let replica_name = manifest.app_name.clone();
-    let (app_name, instance_id) = match replica_name.rfind('-') {
-        Some(pos) => (
-            replica_name[..pos].to_string(),
-            replica_name[pos + 1..].to_string(),
-        ),
-        None => (replica_name.clone(), replica_name.clone()),
-    };
-
+    let replica_name = manifest.app_name.clone();
+    
     {
         let mut map = state.lock().await;
-        let app = map
-            .entry(app_name.clone())
-            .or_insert_with(|| ApplicationState {
-                instances: std::collections::HashMap::new(),
-            });
-        if let Some(inst) = app.instances.get(&instance_id) {
+        if let Some(inst) = map.get(&replica_name) {
             if inst.exit_code.is_none() {
                 return Err("Already running".into());
             }
@@ -532,12 +484,12 @@ async fn spawn_replica(
         openback::dlog!(
             "Daemon",
             "INFO",
-            "Registering replica '{}' in state map (Building)",
+            "Registering container '{}' in state map (Building)",
             replica_name
         );
-        app.instances.insert(
-            instance_id.clone(),
-            InstanceState {
+        map.insert(
+            replica_name.clone(),
+            ContainerState {
                 pid: 0,
                 is_building: true,
                 exit_code: None,
@@ -571,9 +523,7 @@ async fn spawn_replica(
                 e
             );
             let mut map = state_clone.lock().await;
-            if let Some(app) = map.get_mut(&app_name) {
-                app.instances.remove(&instance_id);
-            }
+            map.remove(&replica_name);
             return;
         }
 
@@ -592,9 +542,7 @@ async fn spawn_replica(
                 e
             );
             let mut map = state_clone.lock().await;
-            if let Some(app) = map.get_mut(&app_name) {
-                app.instances.remove(&instance_id);
-            }
+            map.remove(&replica_name);
             return;
         }
 
@@ -660,13 +608,12 @@ async fn spawn_replica(
                             );
                         }
                         let mut map = state_clone.lock().await;
-                        if let Some(app_state) = map.get_mut(&app_name) {
-                            app_state.instances.remove(&instance_id);
-                        }
+                        map.remove(&replica_name);
                         return;
                     }
                 };
 
+                let replica_name_clone = replica_name.clone();
                 let proxy_task = tokio::spawn(async move {
                     let socket_path = container_socket.replace(
                         "/run",
@@ -674,7 +621,7 @@ async fn spawn_replica(
                             "{}/containers/{}/run",
                             std::env::var("OPENBACK_STORE_DIR")
                                 .unwrap_or_else(|_| "/var/lib/openback/store".to_string()),
-                            app_name_inner
+                            replica_name_clone
                         ),
                     );
                     while let Ok((mut tcp_stream, _)) = tcp_listener.accept().await {
@@ -712,8 +659,7 @@ async fn spawn_replica(
         {
             Ok(mut child) => {
                 let pid = child.id().unwrap_or(0);
-                let app_name_inner = app_name.clone();
-                let instance_id_inner = instance_id.clone();
+                let replica_name_inner = replica_name.clone();
 
                 let store_dir = std::env::var("OPENBACK_STORE_DIR")
                     .unwrap_or_else(|_| "/var/lib/openback/store".to_string());
@@ -728,13 +674,11 @@ async fn spawn_replica(
 
                 {
                     let mut map = state_clone.lock().await;
-                    if let Some(app_state) = map.get_mut(&app_name_inner) {
-                        if let Some(inst) = app_state.instances.get_mut(&instance_id_inner) {
-                            inst.pid = pid;
-                            inst.is_building = false;
-                            inst.proxy_tasks = proxy_tasks;
-                            inst.stdin_fifo = Some(fifo_path.clone());
-                        }
+                    if let Some(inst) = map.get_mut(&replica_name_inner) {
+                        inst.pid = pid;
+                        inst.is_building = false;
+                        inst.proxy_tasks = proxy_tasks;
+                        inst.stdin_fifo = Some(fifo_path.clone());
                     }
                 }
 
@@ -752,14 +696,12 @@ async fn spawn_replica(
                         code
                     );
                     let mut map = state_clone2.lock().await;
-                    if let Some(app_state) = map.get_mut(&app_name_inner) {
-                        if let Some(inst) = app_state.instances.get_mut(&instance_id_inner) {
-                            for task in inst.proxy_tasks.drain(..) {
-                                task.abort();
-                            }
-                            inst.exit_code = Some(code);
-                            let _ = std::fs::remove_file(&fifo_path_clone);
+                    if let Some(inst) = map.get_mut(&replica_name_inner) {
+                        for task in inst.proxy_tasks.drain(..) {
+                            task.abort();
                         }
+                        inst.exit_code = Some(code);
+                        let _ = std::fs::remove_file(&fifo_path_clone);
                     }
                 });
             }
@@ -772,9 +714,7 @@ async fn spawn_replica(
                     e
                 );
                 let mut map = state_clone.lock().await;
-                if let Some(app) = map.get_mut(&app_name) {
-                    app.instances.remove(&instance_id);
-                }
+                map.remove(&replica_name);
             }
         }
     });
@@ -784,45 +724,29 @@ async fn spawn_replica(
 
 async fn handle_request(
     request: EngineRequest,
-    state: Arc<Mutex<HashMap<String, ApplicationState>>>,
+    state: Arc<Mutex<HashMap<String, ContainerState>>>,
 ) -> EngineResponse {
     match request {
-        EngineRequest::Attach { app_name } => {
+        EngineRequest::Attach { container_name } => {
             let map = state.lock().await;
-            if let Some(app) = map.get(&app_name) {
-                let mut has_running = false;
-                for inst in app.instances.values() {
-                    if inst.exit_code.is_none() && !inst.is_building {
-                        has_running = true;
-                        break;
-                    }
-                }
-                if has_running {
+            if let Some(inst) = map.get(&container_name) {
+                if inst.exit_code.is_none() && !inst.is_building {
                     EngineResponse::AttachStream
                 } else {
-                    EngineResponse::Error("No running instance found".to_string())
+                    EngineResponse::Error("Container is not running".to_string())
                 }
             } else {
-                EngineResponse::Error(format!("App '{}' not found", app_name))
+                EngineResponse::Error(format!("Container '{}' not found", container_name))
             }
         }
         EngineRequest::Run(manifest) => match spawn_replica(manifest, state.clone()).await {
             Ok(_) => EngineResponse::Ok("Dispatched successfully".to_string()),
             Err(e) => EngineResponse::Error(e),
         },
-        EngineRequest::Start {
-            app_name,
-            instance_id,
-        } => {
+        EngineRequest::Start { container_name } => {
             let manifest = {
                 let map = state.lock().await;
-                if let Some(app) = map.get(&app_name) {
-                    app.instances
-                        .get(&instance_id)
-                        .map(|inst| inst.manifest.clone())
-                } else {
-                    None
-                }
+                map.get(&container_name).map(|inst| inst.manifest.clone())
             };
             if let Some(manifest) = manifest {
                 match spawn_replica(manifest, state.clone()).await {
@@ -835,101 +759,72 @@ async fn handle_request(
         }
         EngineRequest::Ps { all } => {
             let map = state.lock().await;
-            let mut apps = Vec::new();
-            for (app_name, app) in map.iter() {
-                let mut instances = Vec::new();
-                for (id, inst) in app.instances.iter() {
-                    if !all && inst.exit_code.is_some() {
-                        continue;
-                    }
-                    instances.push(openback::rpc::InstanceInfo {
-                        instance_id: id.clone(),
-                        pid: inst.pid,
-                        status: if let Some(code) = inst.exit_code {
-                            format!("Exited ({})", code)
-                        } else if inst.is_building {
-                            "Building".to_string()
-                        } else {
-                            "Running".to_string()
-                        },
-                        start_time: inst.start_time.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    });
+            let mut containers = Vec::new();
+            for (name, inst) in map.iter() {
+                if !all && inst.exit_code.is_some() {
+                    continue;
                 }
-                if !instances.is_empty() || all {
-                    apps.push(openback::rpc::AppInfo {
-                        app_name: app_name.clone(),
-                        instances,
-                    });
-                }
+                containers.push(openback::rpc::ContainerInfo {
+                    container_name: name.clone(),
+                    pid: inst.pid,
+                    status: if let Some(code) = inst.exit_code {
+                        format!("Exited ({})", code)
+                    } else if inst.is_building {
+                        "Building".to_string()
+                    } else {
+                        "Running".to_string()
+                    },
+                    start_time: inst.start_time.format("%Y-%m-%d %H:%M:%S").to_string(),
+                });
             }
-            EngineResponse::AppList(apps)
+            EngineResponse::ContainerList(containers)
         }
-        EngineRequest::Rm {
-            app_name,
-            instance_id,
-        } => {
+        EngineRequest::Rm { container_name } => {
             let mut map = state.lock().await;
-            if let Some(app) = map.get_mut(&app_name) {
-                if let Some(inst) = app.instances.get(&instance_id) {
-                    if inst.pid > 0 && inst.exit_code.is_none() {
-                        return EngineResponse::Error(
-                            "Container is still running. Stop it first.".to_string(),
-                        );
-                    }
-                } else {
-                    return EngineResponse::Error(format!("Container {} not found", instance_id));
+            if let Some(inst) = map.get(&container_name) {
+                if inst.pid > 0 && inst.exit_code.is_none() {
+                    return EngineResponse::Error(
+                        "Container is still running. Stop it first.".to_string(),
+                    );
                 }
-
-                app.instances.remove(&instance_id);
-                if app.instances.is_empty() {
-                    map.remove(&app_name);
-                }
-
+                
                 let store_dir = std::env::var("OPENBACK_STORE_DIR")
                     .unwrap_or_else(|_| "/var/lib/openback/store".to_string());
-                let container_dir =
-                    format!("{}/containers/{}-{}", store_dir, app_name, instance_id);
+                let container_dir = format!("{}/containers/{}", store_dir, container_name);
                 let _ = std::fs::remove_dir_all(container_dir);
-
-                EngineResponse::Ok(format!("Removed container {}-{}", app_name, instance_id))
+                
+                map.remove(&container_name);
+                EngineResponse::Ok(format!("Removed container {}", container_name))
             } else {
-                EngineResponse::Error(format!("App {} not found", app_name))
+                EngineResponse::Error(format!("Container {} not found", container_name))
             }
         }
-        EngineRequest::Stop {
-            app_name,
-            instance_id,
-        } => {
+        EngineRequest::Stop { container_name } => {
             let mut map = state.lock().await;
-            if let Some(app) = map.get_mut(&app_name) {
-                let mut stopped = 0;
-                if let Some(iid) = instance_id {
-                    if let Some(inst) = app.instances.get_mut(&iid) {
-                        for task in inst.proxy_tasks.drain(..) {
-                            task.abort();
-                        }
-                        if inst.exit_code.is_none() && inst.pid > 0 {
-                            let _ = signal::kill(Pid::from_raw(inst.pid as i32), Signal::SIGKILL);
-                            stopped += 1;
-                        }
+            if let Some(name) = container_name {
+                if let Some(inst) = map.get_mut(&name) {
+                    for task in inst.proxy_tasks.drain(..) {
+                        task.abort();
                     }
+                    if inst.exit_code.is_none() && inst.pid > 0 {
+                        let _ = signal::kill(Pid::from_raw(inst.pid as i32), Signal::SIGKILL);
+                    }
+                    EngineResponse::Ok(format!("Container '{}' stopped", name))
                 } else {
-                    for inst in app.instances.values_mut() {
-                        for task in inst.proxy_tasks.drain(..) {
-                            task.abort();
-                        }
-                        if inst.exit_code.is_none() && inst.pid > 0 {
-                            let _ = signal::kill(Pid::from_raw(inst.pid as i32), Signal::SIGKILL);
-                            stopped += 1;
-                        }
+                    EngineResponse::Error(format!("Container '{}' not found", name))
+                }
+            } else {
+                let mut stopped = 0;
+                for inst in map.values_mut() {
+                    for task in inst.proxy_tasks.drain(..) {
+                        task.abort();
+                    }
+                    if inst.exit_code.is_none() && inst.pid > 0 {
+                        let _ = signal::kill(Pid::from_raw(inst.pid as i32), Signal::SIGKILL);
+                        stopped += 1;
                     }
                 }
-                EngineResponse::Ok(format!(
-                    "App '{}' stopped ({} instances)",
-                    app_name, stopped
-                ))
-            } else {
-                EngineResponse::Error(format!("App '{}' not found", app_name))
+                EngineResponse::Ok(format!("Stopped {} containers", stopped))
             }
         }
         EngineRequest::DepsList => {
@@ -943,12 +838,25 @@ async fn handle_request(
                         if let Ok(meta) = entry.metadata() {
                             if meta.is_dir() {
                                 let size_bytes = get_dir_size(&entry.path()).unwrap_or(0);
+                                let mut dep_name = "overlay".to_string();
                                 let mut consumers = Vec::new();
-                                for (app_name, app) in map.iter() {
-                                    for inst in app.instances.values() {
-                                        if let Some(overlay_path) = openback::engine::overlay::OverlayEngine::get_overlay_path(&inst.manifest) {
-                                            if overlay_path.contains(&hash_name)
-                                                && !consumers.contains(app_name) { consumers.push(app_name.clone()); }
+                                for (name, inst) in map.iter() {
+                                    if let Some(overlay_path) = openback::engine::overlay::OverlayEngine::get_overlay_path(&inst.manifest) {
+                                        if overlay_path.contains(&hash_name) {
+                                            if !consumers.contains(name) {
+                                                consumers.push(name.clone());
+                                            }
+                                            if dep_name == "overlay" {
+                                                if let Some(pkgs) = &inst.manifest.packages {
+                                                    let mut all_pkgs = Vec::new();
+                                                    if let Some(apt) = &pkgs.apt { all_pkgs.extend(apt.clone()); }
+                                                    if let Some(apk) = &pkgs.apk { all_pkgs.extend(apk.clone()); }
+                                                    if let Some(dnf) = &pkgs.dnf { all_pkgs.extend(dnf.clone()); }
+                                                    if !all_pkgs.is_empty() {
+                                                        dep_name = all_pkgs.join(",");
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -956,12 +864,28 @@ async fn handle_request(
                                     let dt: chrono::DateTime<chrono::Local> = t.into();
                                     dt.format("%Y-%m-%d %H:%M:%S").to_string()
                                 });
+
+                                let mut target_os = Some("unknown".to_string());
+                                let mut target_libc = Some("unknown".to_string());
+                                let mut target_arch = Some("unknown".to_string());
+                                let manifest_path = entry.path().join("overlay_manifest.json");
+                                if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+                                    if let Ok(manifest) = serde_json::from_str::<BaseManifest>(&content) {
+                                        target_os = Some(manifest.os);
+                                        target_libc = Some(manifest.libc);
+                                        target_arch = Some(manifest.architecture);
+                                    }
+                                }
+
                                 deps.push(DepInfo {
-                                    name: "overlay".to_string(),
+                                    name: dep_name,
                                     version: hash_name,
                                     size_bytes,
                                     consumers,
                                     created_time,
+                                    target_os,
+                                    target_libc,
+                                    target_arch,
                                 });
                             }
                         }
@@ -980,7 +904,7 @@ async fn handle_request(
                 ));
             }
             let dep_path = format!(
-                "{}/store/deps/{}/{}",
+                "{}/deps/{}/{}",
                 std::env::var("OPENBACK_STORE_DIR")
                     .unwrap_or_else(|_| "/var/lib/openback/store".to_string()),
                 parts[0],
@@ -993,11 +917,9 @@ async fn handle_request(
 
             let size_bytes = get_dir_size(path).unwrap_or(0);
             let mut consumers = Vec::new();
-            for (app_name, app) in map.iter() {
-                for inst in app.instances.values() {
-                    if inst.manifest.dependencies.contains(&name) && !consumers.contains(app_name) {
-                        consumers.push(app_name.clone());
-                    }
+            for (name_, inst) in map.iter() {
+                if inst.manifest.dependencies.contains(&name) && !consumers.contains(name_) {
+                    consumers.push(name_.clone());
                 }
             }
             let created_time = path
@@ -1009,19 +931,34 @@ async fn handle_request(
                     dt.format("%Y-%m-%d %H:%M:%S").to_string()
                 });
 
+            let mut target_os = Some("unknown".to_string());
+            let mut target_libc = Some("unknown".to_string());
+            let mut target_arch = Some("unknown".to_string());
+            let manifest_path = path.join("overlay_manifest.json");
+            if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+                if let Ok(manifest) = serde_json::from_str::<BaseManifest>(&content) {
+                    target_os = Some(manifest.os);
+                    target_libc = Some(manifest.libc);
+                    target_arch = Some(manifest.architecture);
+                }
+            }
+
             EngineResponse::DepDetails(DepInfo {
                 name: parts[0].to_string(),
                 version: parts[1].to_string(),
                 size_bytes,
                 consumers,
                 created_time,
+                target_os,
+                target_libc,
+                target_arch,
             })
         }
         EngineRequest::DepsRemove { .. } => EngineResponse::Ok("Removed".to_string()),
         EngineRequest::DepsPrune => {
             let map = state.lock().await;
             let deps_path = &std::path::PathBuf::from(format!(
-                "{}/store/deps",
+                "{}/deps",
                 std::env::var("OPENBACK_STORE_DIR")
                     .unwrap_or_else(|_| "/var/lib/openback/store".to_string())
             ));
@@ -1038,10 +975,8 @@ async fn handle_request(
                                             sub_entry.file_name().into_string().unwrap_or_default();
                                         let full_dep_str = format!("{}@{}", dep_name, dep_version);
 
-                                        let is_used = map.values().any(|app| {
-                                            app.instances.values().any(|inst| {
-                                                inst.manifest.dependencies.contains(&full_dep_str)
-                                            })
+                                        let is_used = map.values().any(|inst| {
+                                            inst.manifest.dependencies.contains(&full_dep_str)
                                         });
 
                                         if !is_used
@@ -1062,7 +997,7 @@ async fn handle_request(
         EngineRequest::BaseList => {
             let map = state.lock().await;
             let bases_path = &std::path::PathBuf::from(format!(
-                "{}/store/images",
+                "{}/images",
                 std::env::var("OPENBACK_STORE_DIR")
                     .unwrap_or_else(|_| "/var/lib/openback/store".to_string())
             ));
@@ -1075,13 +1010,9 @@ async fn handle_request(
                             if meta.is_dir() {
                                 let size_bytes = get_dir_size(&entry.path()).unwrap_or(0);
                                 let mut consumers = Vec::new();
-                                for (app_name, app) in map.iter() {
-                                    for inst in app.instances.values() {
-                                        if inst.manifest.get_base_image() == base_name
-                                            && !consumers.contains(app_name)
-                                        {
-                                            consumers.push(app_name.clone());
-                                        }
+                                for (name, inst) in map.iter() {
+                                    if inst.manifest.get_base_image() == base_name && !consumers.contains(name) {
+                                        consumers.push(name.clone());
                                     }
                                 }
                                 let created_time = meta.created().ok().map(|t| {
@@ -1097,7 +1028,11 @@ async fn handle_request(
                                         None
                                     }
                                 } else {
-                                    None
+                                    let detected = openback::engine::inspector::inspect_base_image(&entry.path());
+                                    if let Ok(json) = serde_json::to_string_pretty(&detected) {
+                                        let _ = std::fs::write(&manifest_path, json);
+                                    }
+                                    Some(detected)
                                 };
 
                                 bases.push(BaseInfo {
@@ -1117,7 +1052,7 @@ async fn handle_request(
         EngineRequest::BaseInspect(name) => {
             let map = state.lock().await;
             let base_path = format!(
-                "{}/store/images/{}",
+                "{}/images/{}",
                 std::env::var("OPENBACK_STORE_DIR")
                     .unwrap_or_else(|_| "/var/lib/openback/store".to_string()),
                 name
@@ -1129,11 +1064,9 @@ async fn handle_request(
 
             let size_bytes = get_dir_size(path).unwrap_or(0);
             let mut consumers = Vec::new();
-            for (app_name, app) in map.iter() {
-                for inst in app.instances.values() {
-                    if inst.manifest.get_base_image() == name && !consumers.contains(app_name) {
-                        consumers.push(app_name.clone());
-                    }
+            for (name_, inst) in map.iter() {
+                if inst.manifest.get_base_image() == name && !consumers.contains(name_) {
+                    consumers.push(name_.clone());
                 }
             }
             let created_time = path
@@ -1153,7 +1086,11 @@ async fn handle_request(
                     None
                 }
             } else {
-                None
+                let detected = openback::engine::inspector::inspect_base_image(&path);
+                if let Ok(json) = serde_json::to_string_pretty(&detected) {
+                    let _ = std::fs::write(&manifest_path, json);
+                }
+                Some(detected)
             };
 
             EngineResponse::BaseDetails(BaseInfo {
@@ -1178,10 +1115,8 @@ async fn handle_request(
                         let base_name = entry.file_name().into_string().unwrap_or_default();
                         if let Ok(meta) = entry.metadata() {
                             if meta.is_dir() {
-                                let is_used = map.values().any(|app| {
-                                    app.instances
-                                        .values()
-                                        .any(|inst| inst.manifest.get_base_image() == base_name)
+                                let is_used = map.values().any(|inst| {
+                                    inst.manifest.get_base_image() == base_name
                                 });
 
                                 if !is_used && std::fs::remove_dir_all(entry.path()).is_ok() {
@@ -1195,35 +1130,12 @@ async fn handle_request(
             EngineResponse::PruneResult(pruned)
         }
         EngineRequest::Logs {
-            app_name,
-            instance_id,
+            container_name,
             tail,
         } => {
             let log_file = {
                 let map = state.lock().await;
-                if let Some(app) = map.get(&app_name) {
-                    let mut path = None;
-                    if let Some(iid) = instance_id {
-                        if let Some(inst) = app.instances.get(&iid) {
-                            path = Some(inst.log_file.clone());
-                        }
-                    } else {
-                        for inst in app.instances.values() {
-                            if inst.exit_code.is_none() {
-                                path = Some(inst.log_file.clone());
-                                break;
-                            }
-                        }
-                    }
-                    if path.is_none() {
-                        if let Some(inst) = app.instances.values().last() {
-                            path = Some(inst.log_file.clone());
-                        }
-                    }
-                    path
-                } else {
-                    None
-                }
+                map.get(&container_name).map(|inst| inst.log_file.clone())
             };
 
             if let Some(path) = log_file {
@@ -1236,10 +1148,10 @@ async fn handle_request(
                     };
                     EngineResponse::LogLines(selected)
                 } else {
-                    EngineResponse::Error(format!("Failed to read logs for app '{}'", app_name))
+                    EngineResponse::Error(format!("Failed to read logs for container '{}'", container_name))
                 }
             } else {
-                EngineResponse::Error(format!("App '{}' not found", app_name))
+                EngineResponse::Error(format!("Container '{}' not found", container_name))
             }
         }
     }

@@ -539,6 +539,13 @@ impl OverlayEngine {
             "Overlay layer persisted at: {}",
             cache_layer
         );
+
+        let manifest = crate::engine::inspector::inspect_base_image(std::path::Path::new(&base_dir));
+        let manifest_path = format!("{}/overlay_manifest.json", cache_dir);
+        if let Ok(json) = serde_json::to_string_pretty(&manifest) {
+            let _ = std::fs::write(&manifest_path, json);
+        }
+
         let _ = Command::new("rm").arg("-rf").arg(&build_root).status();
 
         Ok(())
