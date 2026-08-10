@@ -30,6 +30,9 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
     - name: Run cargo fmt
       run: cargo fmt --all -- --check
 
