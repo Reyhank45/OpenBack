@@ -73,41 +73,47 @@ pub async fn ps(all: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn stop(container_name: String) -> Result<()> {
-    match send_rpc_request(EngineRequest::Stop {
-        container_name: Some(container_name),
-    })
-    .await?
-    {
-        EngineResponse::Ok(msg) => println!("Success: {}", msg),
-        EngineResponse::Error(err) => eprintln!("Error: {}", err),
-        _ => eprintln!("Unexpected response from daemon"),
+pub async fn stop(container_names: Vec<String>) -> Result<()> {
+    for container_name in container_names {
+        match send_rpc_request(EngineRequest::Stop {
+            container_name: Some(container_name),
+        })
+        .await?
+        {
+            EngineResponse::Ok(msg) => println!("Success: {}", msg),
+            EngineResponse::Error(err) => eprintln!("Error: {}", err),
+            _ => eprintln!("Unexpected response from daemon"),
+        }
     }
     Ok(())
 }
 
-pub async fn start(container_name: String) -> Result<()> {
-    match send_rpc_request(EngineRequest::Start {
-        container_name,
-    })
-    .await?
-    {
-        EngineResponse::Ok(msg) => println!("Success: {}", msg),
-        EngineResponse::Error(err) => eprintln!("Error: {}", err),
-        _ => eprintln!("Unexpected response from daemon"),
+pub async fn start(container_names: Vec<String>) -> Result<()> {
+    for container_name in container_names {
+        match send_rpc_request(EngineRequest::Start {
+            container_name,
+        })
+        .await?
+        {
+            EngineResponse::Ok(msg) => println!("Success: {}", msg),
+            EngineResponse::Error(err) => eprintln!("Error: {}", err),
+            _ => eprintln!("Unexpected response from daemon"),
+        }
     }
     Ok(())
 }
 
-pub async fn rm(container_name: String) -> Result<()> {
-    match send_rpc_request(EngineRequest::Rm {
-        container_name,
-    })
-    .await?
-    {
-        EngineResponse::Ok(msg) => println!("Success: {}", msg),
-        EngineResponse::Error(err) => eprintln!("Error: {}", err),
-        _ => eprintln!("Unexpected response from daemon"),
+pub async fn rm(container_names: Vec<String>) -> Result<()> {
+    for container_name in container_names {
+        match send_rpc_request(EngineRequest::Rm {
+            container_name,
+        })
+        .await?
+        {
+            EngineResponse::Ok(msg) => println!("Success: {}", msg),
+            EngineResponse::Error(err) => eprintln!("Error: {}", err),
+            _ => eprintln!("Unexpected response from daemon"),
+        }
     }
     Ok(())
 }

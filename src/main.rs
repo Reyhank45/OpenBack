@@ -31,18 +31,18 @@ enum Commands {
     },
     /// Stop a running container by name
     Stop {
-        /// Name of the container to stop
-        container_name: String,
+        /// Names of the containers to stop
+        container_names: Vec<String>,
     },
     /// Start a stopped container by name
     Start {
-        /// Name of the container to start
-        container_name: String,
+        /// Names of the containers to start
+        container_names: Vec<String>,
     },
     /// Remove a stopped container
     Rm {
-        /// Name of the container to remove
-        container_name: String,
+        /// Names of the containers to remove
+        container_names: Vec<String>,
     },
     /// Get logs for a container
     Logs {
@@ -115,14 +115,14 @@ async fn main() -> anyhow::Result<()> {
         Commands::Ps { all } => {
             client::ps(all).await?;
         }
-        Commands::Stop { container_name } => {
-            client::stop(container_name).await?;
+        Commands::Stop { container_names } => {
+            client::stop(container_names).await?;
         }
-        Commands::Start { container_name } => {
-            client::start(container_name).await?;
+        Commands::Start { container_names } => {
+            client::start(container_names).await?;
         }
-        Commands::Rm { container_name } => {
-            client::rm(container_name).await?;
+        Commands::Rm { container_names } => {
+            client::rm(container_names).await?;
         }
         Commands::Logs { container_name } => {
             client::logs(container_name).await?;
