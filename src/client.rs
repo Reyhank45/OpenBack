@@ -1,18 +1,22 @@
 use anyhow::{Context, Result};
 use openback::manifest::AppManifest;
-use openback::rpc::{RpcRequest, RpcResponse};
+use openback::rpc::{EngineEnvelope, EngineRequest, EngineResponse};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-async fn send_rpc_request(request: RpcRequest) -> Result<RpcResponse> {
+async fn send_rpc_request(request: EngineRequest) -> Result<EngineResponse> {
     let socket_path =
         &std::env::var("OPENBACK_SOCKET").unwrap_or_else(|_| "/tmp/openbackd.sock".to_string());
     let mut stream = UnixStream::connect(socket_path)
         .await
         .with_context(|| format!("Failed to connect to daemon at {}", socket_path))?;
 
-    let mut payload = serde_json::to_string(&request)?;
+    let envelope = EngineEnvelope {
+        auth_token: None,
+        request,
+    };
+    let mut payload = serde_json::to_string(&envelope)?;
     payload.push('\n');
 
     stream.write_all(payload.as_bytes()).await?;
@@ -25,7 +29,7 @@ async fn send_rpc_request(request: RpcRequest) -> Result<RpcResponse> {
         anyhow::bail!("Daemon closed connection unexpectedly");
     }
 
-    let response: RpcResponse = serde_json::from_str(&line)?;
+    let response: EngineResponse = serde_json::from_str(&line)?;
     Ok(response)
 }
 
@@ -39,66 +43,135 @@ pub async fn run_app(manifest_path: PathBuf) -> Result<()> {
 
     println!("Sending Run request for app: {}", manifest.app_name);
 
-    match send_rpc_request(RpcRequest::Run(manifest)).await? {
-        RpcResponse::Ok(msg) => println!("Success: {}", msg),
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+    match send_rpc_request(EngineRequest::Run(manifest)).await? {
+        EngineResponse::Ok(msg) => println!("Success: {}", msg),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
 
     Ok(())
 }
 
-pub async fn ps() -> Result<()> {
-    match send_rpc_request(RpcRequest::Ps).await? {
-        RpcResponse::ProcessList(processes) => {
+pub async fn ps(all: bool) -> Result<()> {
+    match send_rpc_request(EngineRequest::Ps { all }).await? {
+        EngineResponse::AppList(apps) => {
             println!(
-                "{:<20} | {:<10} | {:<10} | {:<25}",
+                "{:<40} | {:<10} | {:<10} | {:<25}",
                 "APP NAME", "PID", "STATUS", "START TIME"
             );
-            println!("{:-<20}-+-{:-<10}-+-{:-<10}-+-{:-<25}", "", "", "", "");
-            for p in processes {
-                println!(
-                    "{:<20} | {:<10} | {:<10} | {:<25}",
-                    p.name, p.pid, p.status, p.start_time
-                );
+            println!("{:-<40}-+-{:-<10}-+-{:-<10}-+-{:-<25}", "", "", "", "");
+            for app in apps {
+                for p in app.instances {
+                    let full_name = if p.instance_id.is_empty() || app.app_name == p.instance_id {
+                        app.app_name.clone()
+                    } else {
+                        format!("{}-{}", app.app_name, p.instance_id)
+                    };
+                    println!(
+                        "{:<40} | {:<10} | {:<10} | {:<25}",
+                        full_name, p.pid, p.status, p.start_time
+                    );
+                }
             }
         }
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
 }
 
-pub async fn stop(app_name: String) -> Result<()> {
-    match send_rpc_request(RpcRequest::Stop(app_name)).await? {
-        RpcResponse::Ok(msg) => println!("Success: {}", msg),
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
-        _ => eprintln!("Unexpected response from daemon"),
-    }
-    Ok(())
-}
-
-pub async fn logs(app_name: String) -> Result<()> {
-    match send_rpc_request(RpcRequest::Logs {
+pub async fn stop(container_name: String) -> Result<()> {
+    let (app_name, instance_id) = match container_name.rfind('-') {
+        Some(pos) => (
+            container_name[..pos].to_string(),
+            Some(container_name[pos + 1..].to_string()),
+        ),
+        None => (container_name, None),
+    };
+    match send_rpc_request(EngineRequest::Stop {
         app_name,
+        instance_id,
+    })
+    .await?
+    {
+        EngineResponse::Ok(msg) => println!("Success: {}", msg),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn start(container_name: String) -> Result<()> {
+    let (app_name, instance_id) = match container_name.rfind('-') {
+        Some(pos) => (
+            container_name[..pos].to_string(),
+            container_name[pos + 1..].to_string(),
+        ),
+        None => (container_name.clone(), container_name.clone()),
+    };
+    match send_rpc_request(EngineRequest::Start {
+        app_name,
+        instance_id,
+    })
+    .await?
+    {
+        EngineResponse::Ok(msg) => println!("Success: {}", msg),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn rm(container_name: String) -> Result<()> {
+    let (app_name, instance_id) = match container_name.rfind('-') {
+        Some(pos) => (
+            container_name[..pos].to_string(),
+            container_name[pos + 1..].to_string(),
+        ),
+        None => (container_name.clone(), container_name.clone()),
+    };
+    match send_rpc_request(EngineRequest::Rm {
+        app_name,
+        instance_id,
+    })
+    .await?
+    {
+        EngineResponse::Ok(msg) => println!("Success: {}", msg),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
+        _ => eprintln!("Unexpected response from daemon"),
+    }
+    Ok(())
+}
+
+pub async fn logs(container_name: String) -> Result<()> {
+    let (app_name, instance_id) = match container_name.rfind('-') {
+        Some(pos) => (
+            container_name[..pos].to_string(),
+            Some(container_name[pos + 1..].to_string()),
+        ),
+        None => (container_name, None),
+    };
+    match send_rpc_request(EngineRequest::Logs {
+        app_name,
+        instance_id,
         tail: None,
     })
     .await?
     {
-        RpcResponse::LogLines(lines) => {
+        EngineResponse::LogLines(lines) => {
             for line in lines {
                 println!("{}", line);
             }
         }
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
 }
 
 pub async fn deps_list() -> Result<()> {
-    match send_rpc_request(RpcRequest::DepsList).await? {
-        RpcResponse::DepsList(deps) => {
+    match send_rpc_request(EngineRequest::DepsList).await? {
+        EngineResponse::DepsList(deps) => {
             println!(
                 "{:<30} | {:<15} | {:<10} | {:<30}",
                 "DEPENDENCY", "VERSION", "SIZE (MB)", "ACTIVE CONSUMERS"
@@ -117,27 +190,27 @@ pub async fn deps_list() -> Result<()> {
                 );
             }
         }
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
 }
 
 pub async fn deps_inspect(name: String) -> Result<()> {
-    match send_rpc_request(RpcRequest::DepsInspect(name)).await? {
-        RpcResponse::DepDetails(details) => {
+    match send_rpc_request(EngineRequest::DepsInspect(name)).await? {
+        EngineResponse::DepDetails(details) => {
             let json = serde_json::to_string_pretty(&details)?;
             println!("{}", json);
         }
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
 }
 
 pub async fn deps_prune() -> Result<()> {
-    match send_rpc_request(RpcRequest::DepsPrune).await? {
-        RpcResponse::PruneResult(pruned) => {
+    match send_rpc_request(EngineRequest::DepsPrune).await? {
+        EngineResponse::PruneResult(pruned) => {
             if pruned.is_empty() {
                 println!("No unused dependencies found. Nothing to prune.");
             } else {
@@ -147,24 +220,24 @@ pub async fn deps_prune() -> Result<()> {
                 }
             }
         }
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
 }
 
 pub async fn deps_remove(name: String, force: bool) -> Result<()> {
-    match send_rpc_request(RpcRequest::DepsRemove { name, force }).await? {
-        RpcResponse::Ok(msg) => println!("Success: {}", msg),
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+    match send_rpc_request(EngineRequest::DepsRemove { name, force }).await? {
+        EngineResponse::Ok(msg) => println!("Success: {}", msg),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
 }
 
 pub async fn base_list() -> Result<()> {
-    match send_rpc_request(RpcRequest::BaseList).await? {
-        RpcResponse::BaseList(bases) => {
+    match send_rpc_request(EngineRequest::BaseList).await? {
+        EngineResponse::BaseList(bases) => {
             println!(
                 "{:<25} | {:<10} | {:<10} | {:<10} | {:<15} | {:<25}",
                 "BASE NAME", "OS", "LIBC", "ARCH", "SIZE (MB)", "ACTIVE CONSUMERS"
@@ -197,27 +270,27 @@ pub async fn base_list() -> Result<()> {
                 );
             }
         }
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
 }
 
 pub async fn base_inspect(name: String) -> Result<()> {
-    match send_rpc_request(RpcRequest::BaseInspect(name)).await? {
-        RpcResponse::BaseDetails(details) => {
+    match send_rpc_request(EngineRequest::BaseInspect(name)).await? {
+        EngineResponse::BaseDetails(details) => {
             let json = serde_json::to_string_pretty(&details)?;
             println!("{}", json);
         }
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
 }
 
 pub async fn base_prune() -> Result<()> {
-    match send_rpc_request(RpcRequest::BasePrune).await? {
-        RpcResponse::PruneResult(pruned) => {
+    match send_rpc_request(EngineRequest::BasePrune).await? {
+        EngineResponse::PruneResult(pruned) => {
             if pruned.is_empty() {
                 println!("No unused base images found. Nothing to prune.");
             } else {
@@ -227,7 +300,7 @@ pub async fn base_prune() -> Result<()> {
                 }
             }
         }
-        RpcResponse::Error(err) => eprintln!("Error: {}", err),
+        EngineResponse::Error(err) => eprintln!("Error: {}", err),
         _ => eprintln!("Unexpected response from daemon"),
     }
     Ok(())
@@ -247,28 +320,26 @@ mod tests {
 
         let listener = UnixListener::bind(socket_path).unwrap();
 
-        // Spawn mock server
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut reader = BufReader::new(&mut stream);
             let mut line = String::new();
             reader.read_line(&mut line).await.unwrap();
 
-            // Send back a mock RpcResponse::ProcessList
-            let mock_response =
-                openback::rpc::RpcResponse::ProcessList(vec![openback::rpc::ProcessInfo {
-                    name: "test-app".to_string(),
+            let mock_response = EngineResponse::AppList(vec![openback::rpc::AppInfo {
+                app_name: "test-app".to_string(),
+                instances: vec![openback::rpc::InstanceInfo {
+                    instance_id: "test-hash".to_string(),
                     pid: 1234,
                     status: "running".to_string(),
                     start_time: "2026-08-07T00:00:00Z".to_string(),
-                }]);
+                }],
+            }]);
             let mut response_json = serde_json::to_string(&mock_response).unwrap();
             response_json.push('\n');
             stream.write_all(response_json.as_bytes()).await.unwrap();
         });
 
-        // Run the client function, which will hit the mock server.
-        // ps() prints to stdout, so we just check it doesn't error.
         let res = ps().await;
         assert!(res.is_ok());
         let _ = std::fs::remove_file(socket_path);

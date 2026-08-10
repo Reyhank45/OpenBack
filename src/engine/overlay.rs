@@ -21,7 +21,7 @@ pub struct OverlayEngine;
 impl OverlayEngine {
     pub fn get_overlay_path(manifest: &AppManifest) -> Option<String> {
         let base_image = manifest.get_base_image();
-        
+
         let packages_dir = match &manifest.packages {
             Some(pkgs) => pkgs,
             None => return None,
@@ -41,7 +41,7 @@ impl OverlayEngine {
         }
 
         all_pkgs.sort();
-        
+
         let mut hasher = Sha256::new();
         hasher.update(base_image.as_bytes());
         hasher.update(b":");
@@ -58,14 +58,25 @@ impl OverlayEngine {
                 .map(|mut d| d.next().is_some())
                 .unwrap_or(false)
         {
-            crate::dlog!("OverlayEngine", "INFO", "Base image '{}' already cached at {}", base_image, base_dir);
+            crate::dlog!(
+                "OverlayEngine",
+                "INFO",
+                "Base image '{}' already cached at {}",
+                base_image,
+                base_dir
+            );
             return Ok(());
         }
 
         let notify = {
             let mut locks = BASE_IMAGE_LOCKS.lock().await;
             if let Some(n) = locks.get(base_image) {
-                crate::dlog!("OverlayEngine", "INFO", "Another task is already downloading '{}', waiting...", base_image);
+                crate::dlog!(
+                    "OverlayEngine",
+                    "INFO",
+                    "Another task is already downloading '{}', waiting...",
+                    base_image
+                );
                 Some(n.clone())
             } else {
                 let n = Arc::new(Notify::new());
@@ -147,7 +158,12 @@ impl OverlayEngine {
         let packages_dir = match &manifest.packages {
             Some(pkgs) => pkgs,
             None => {
-                crate::dlog!("OverlayEngine", "INFO", "No packages declared for '{}', skipping overlay build.", manifest.app_name);
+                crate::dlog!(
+                    "OverlayEngine",
+                    "INFO",
+                    "No packages declared for '{}', skipping overlay build.",
+                    manifest.app_name
+                );
                 return Ok(None);
             }
         };
@@ -167,7 +183,12 @@ impl OverlayEngine {
         }
 
         if all_pkgs.is_empty() {
-            crate::dlog!("OverlayEngine", "INFO", "Package list is empty for '{}', skipping overlay build.", manifest.app_name);
+            crate::dlog!(
+                "OverlayEngine",
+                "INFO",
+                "Package list is empty for '{}', skipping overlay build.",
+                manifest.app_name
+            );
             return Ok(None);
         }
 
@@ -176,17 +197,39 @@ impl OverlayEngine {
         let _cache_dir = format!("/var/lib/openback/cache/overlays/{}", hash);
 
         if std::path::Path::new(&cache_layer).exists() {
-            crate::dlog!("OverlayEngine", "INFO", "Package overlay cache HIT for hash {} (packages: {})", &hash[..12], all_pkgs.join(", "));
+            crate::dlog!(
+                "OverlayEngine",
+                "INFO",
+                "Package overlay cache HIT for hash {} (packages: {})",
+                &hash[..12],
+                all_pkgs.join(", ")
+            );
             return Ok(Some(cache_layer));
         }
 
-        crate::dlog!("OverlayEngine", "INFO", "Package overlay cache MISS for hash {} — building ephemeral sandbox...", &hash[..12]);
-        crate::dlog!("OverlayEngine", "INFO", "Packages to install via {}: {:?}", pkg_manager, all_pkgs);
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Package overlay cache MISS for hash {} — building ephemeral sandbox...",
+            &hash[..12]
+        );
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Packages to install via {}: {:?}",
+            pkg_manager,
+            all_pkgs
+        );
 
         let notify = {
             let mut locks = OVERLAY_LOCKS.lock().await;
             if let Some(n) = locks.get(&hash) {
-                crate::dlog!("OverlayEngine", "INFO", "Another task is already building overlay {}, waiting...", &hash[..12]);
+                crate::dlog!(
+                    "OverlayEngine",
+                    "INFO",
+                    "Another task is already building overlay {}, waiting...",
+                    &hash[..12]
+                );
                 Some(n.clone())
             } else {
                 let n = Arc::new(Notify::new());
@@ -210,12 +253,7 @@ impl OverlayEngine {
         let build_pkgs = all_pkgs.clone();
 
         let res = task::spawn_blocking(move || {
-            Self::build_ephemeral_sandbox(
-                &build_base,
-                &build_hash,
-                &build_pkg_manager,
-                &build_pkgs,
-            )
+            Self::build_ephemeral_sandbox(&build_base, &build_hash, &build_pkg_manager, &build_pkgs)
         })
         .await?;
 
@@ -227,7 +265,12 @@ impl OverlayEngine {
         }
 
         res?;
-        crate::dlog!("OverlayEngine", "INFO", "Overlay build complete. Cache layer ready at: {}", cache_layer);
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Overlay build complete. Cache layer ready at: {}",
+            cache_layer
+        );
         Ok(Some(cache_layer))
     }
 
@@ -247,12 +290,21 @@ impl OverlayEngine {
         let work_dir = format!("{}/work", build_root);
         let merged_dir = format!("{}/merged", build_root);
 
-        crate::dlog!("OverlayEngine", "INFO", "Creating build sandbox at {}", build_root);
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Creating build sandbox at {}",
+            build_root
+        );
         std::fs::create_dir_all(&upper_dir)?;
         std::fs::create_dir_all(&work_dir)?;
         std::fs::create_dir_all(&merged_dir)?;
 
-        crate::dlog!("OverlayEngine", "INFO", "Unsharing mount namespace for ephemeral build...");
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Unsharing mount namespace for ephemeral build..."
+        );
         unshare(CloneFlags::CLONE_NEWNS)?;
 
         mount(
@@ -269,7 +321,13 @@ impl OverlayEngine {
             base_dir, upper_dir, work_dir
         );
 
-        crate::dlog!("OverlayEngine", "INFO", "Mounting build OverlayFS: lower={} upper={}", base_dir, upper_dir);
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Mounting build OverlayFS: lower={} upper={}",
+            base_dir,
+            upper_dir
+        );
         mount(
             Some("overlay"),
             merged_dir.as_str(),
@@ -304,7 +362,11 @@ impl OverlayEngine {
         )
         .ok();
 
-        crate::dlog!("OverlayEngine", "INFO", "Copying host /etc/resolv.conf into chroot for DNS resolution...");
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Copying host /etc/resolv.conf into chroot for DNS resolution..."
+        );
         std::fs::copy("/etc/resolv.conf", &resolv_conf).ok();
 
         // Build log file — kept for post-mortem debugging
@@ -314,12 +376,22 @@ impl OverlayEngine {
             .append(true)
             .open(&build_log_path)
             .ok();
-        crate::dlog!("OverlayEngine", "INFO", "Build output will also be captured to {}", build_log_path);
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Build output will also be captured to {}",
+            build_log_path
+        );
 
         let mut cmd;
         match pkg_manager {
             "apt" => {
-                crate::dlog!("OverlayEngine", "BUILD", "Running apt-get to install: {}", pkgs.join(" "));
+                crate::dlog!(
+                    "OverlayEngine",
+                    "BUILD",
+                    "Running apt-get to install: {}",
+                    pkgs.join(" ")
+                );
                 cmd = Command::new("chroot");
                 cmd.arg(&merged_dir);
                 cmd.arg("sh").arg("-c").arg(format!(
@@ -330,7 +402,12 @@ impl OverlayEngine {
                 cmd.env("DEBCONF_NONINTERACTIVE_SEEN", "true");
             }
             "apk" => {
-                crate::dlog!("OverlayEngine", "BUILD", "Running apk to install: {}", pkgs.join(" "));
+                crate::dlog!(
+                    "OverlayEngine",
+                    "BUILD",
+                    "Running apk to install: {}",
+                    pkgs.join(" ")
+                );
                 cmd = Command::new("chroot");
                 cmd.arg(&merged_dir);
                 cmd.arg("sh").arg("-c").arg(format!(
@@ -339,13 +416,17 @@ impl OverlayEngine {
                 ));
             }
             "dnf" => {
-                crate::dlog!("OverlayEngine", "BUILD", "Running dnf to install: {}", pkgs.join(" "));
+                crate::dlog!(
+                    "OverlayEngine",
+                    "BUILD",
+                    "Running dnf to install: {}",
+                    pkgs.join(" ")
+                );
                 cmd = Command::new("chroot");
                 cmd.arg(&merged_dir);
-                cmd.arg("sh").arg("-c").arg(format!(
-                    "dnf install -y {}",
-                    pkgs.join(" ")
-                ));
+                cmd.arg("sh")
+                    .arg("-c")
+                    .arg(format!("dnf install -y {}", pkgs.join(" ")));
             }
             _ => anyhow::bail!("Unsupported package manager: {}", pkg_manager),
         }
@@ -407,19 +488,40 @@ impl OverlayEngine {
 
         if !status.success() {
             // Clean up the broken build root so the next apply triggers a fresh build
-            crate::dlog!("OverlayEngine", "ERROR", "{} exited with {} — removing broken build root {}", pkg_manager, status, build_root);
+            crate::dlog!(
+                "OverlayEngine",
+                "ERROR",
+                "{} exited with {} — removing broken build root {}",
+                pkg_manager,
+                status,
+                build_root
+            );
             let _ = Command::new("rm").arg("-rf").arg(&build_root).status();
-            anyhow::bail!("{} failed with exit status {} while installing {:?}", pkg_manager, status, pkgs);
+            anyhow::bail!(
+                "{} failed with exit status {} while installing {:?}",
+                pkg_manager,
+                status,
+                pkgs
+            );
         }
 
-        crate::dlog!("OverlayEngine", "INFO", "Package installation succeeded. Persisting overlay layer...");
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Package installation succeeded. Persisting overlay layer..."
+        );
 
         let cache_dir = format!("/var/lib/openback/cache/overlays/{}", hash);
         let cache_layer = format!("{}/layer", cache_dir);
         std::fs::create_dir_all(&cache_dir)?;
 
         if let Err(e) = std::fs::rename(&upper_dir, &cache_layer) {
-            crate::dlog!("OverlayEngine", "WARN", "rename failed ({}), falling back to cp -a...", e);
+            crate::dlog!(
+                "OverlayEngine",
+                "WARN",
+                "rename failed ({}), falling back to cp -a...",
+                e
+            );
             let cp_status = Command::new("cp")
                 .arg("-a")
                 .arg(&upper_dir)
@@ -431,7 +533,12 @@ impl OverlayEngine {
             }
         }
 
-        crate::dlog!("OverlayEngine", "INFO", "Overlay layer persisted at: {}", cache_layer);
+        crate::dlog!(
+            "OverlayEngine",
+            "INFO",
+            "Overlay layer persisted at: {}",
+            cache_layer
+        );
         let _ = Command::new("rm").arg("-rf").arg(&build_root).status();
 
         Ok(())

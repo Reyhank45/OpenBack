@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenBack Cluster Agent (backlet)
+After=network.target etcd.service openbackd.service
+Requires=openbackd.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/default/backlet
+ExecStart=/usr/bin/backlet $BACKLET_EXTRA_ARGS
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

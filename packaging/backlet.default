@@ -1,0 +1,4 @@
+# Default settings for backlet. This file is sourced by systemd
+
+# Etcd endpoints
+BACKLET_EXTRA_ARGS="--etcd-endpoints 127.0.0.1:2379"

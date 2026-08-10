@@ -1,3 +1,11 @@
+openback (0.2.0-1) unstable; urgency=medium
+
+  * Major architectural overhaul to Etcd backing.
+  * Added backlet orchestrator daemon.
+  * Renamed backcli to backctl.
+
+ -- OpenBack Maintainer <wiratamareyhan85@gmail.com>  Mon, 10 Aug 2026 18:00:00 +0700
+
 openback (0.1.3-1) unstable; urgency=medium
 
   * Initial release for Debian Mentors.

@@ -72,9 +72,9 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
 
     let base_image = manifest.get_base_image();
     let base_dir = format!("/var/lib/openback/store/images/{}", base_image);
-    
+
     let replica_id = &manifest.app_name;
-    let replica_base = format!("/tmp/openback/replicas/{}", replica_id);
+    let replica_base = format!("/var/lib/openback/store/containers/{}", replica_id);
     let replica_upper = format!("{}/upper", replica_base);
     let replica_work = format!("{}/work", replica_base);
     let target_root = format!("{}/rootfs", replica_base);
@@ -84,12 +84,14 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
     std::fs::create_dir_all(&target_root)?;
 
     let mut lower_dirs = vec![base_dir.clone()];
-    if let Some(overlay_path) = openback::engine::overlay::OverlayEngine::get_overlay_path(&manifest) {
+    if let Some(overlay_path) =
+        openback::engine::overlay::OverlayEngine::get_overlay_path(&manifest)
+    {
         if std::path::Path::new(&overlay_path).exists() {
             lower_dirs.insert(0, overlay_path); // Package overlay is on top of base image
         }
     }
-    
+
     let lower_dirs_str = lower_dirs.join(":");
     let mount_options = format!(
         "lowerdir={},upperdir={},workdir={}",
@@ -102,7 +104,8 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
         Some("overlay"),
         MsFlags::MS_NODEV,
         Some(mount_options.as_str()),
-    ).context("Failed to mount 3-tier OverlayFS")?;
+    )
+    .context("Failed to mount 3-tier OverlayFS")?;
 
     let app_rootfs = target_root;
     let app_workspace = replica_base;
@@ -220,7 +223,10 @@ fn setup_and_exec(manifest: AppManifest) -> Result<()> {
     pivot_root(app_rootfs.as_str(), old_root.as_str()).context("pivot_root failed")?;
 
     // Change current directory to work_dir
-    let work_dir = manifest.work_dir.clone().unwrap_or_else(|| "/app".to_string());
+    let work_dir = manifest
+        .work_dir
+        .clone()
+        .unwrap_or_else(|| "/app".to_string());
     chdir(work_dir.as_str()).context(format!("Failed to chdir to {}", work_dir))?;
 
     // Unmount the old root

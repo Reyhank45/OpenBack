@@ -2,16 +2,29 @@ use crate::manifest::AppManifest;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RpcEnvelope {
+pub struct EngineEnvelope {
     pub auth_token: Option<String>,
-    pub request: RpcRequest,
+    pub request: EngineRequest,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum RpcRequest {
+pub enum EngineRequest {
     Run(AppManifest),
-    Ps,
-    Stop(String),
+    Ps {
+        all: bool,
+    },
+    Start {
+        app_name: String,
+        instance_id: String,
+    },
+    Stop {
+        app_name: String,
+        instance_id: Option<String>,
+    },
+    Rm {
+        app_name: String,
+        instance_id: String,
+    },
     DepsList,
     DepsInspect(String),
     DepsPrune,
@@ -22,17 +35,33 @@ pub enum RpcRequest {
     BaseList,
     BaseInspect(String),
     BasePrune,
+    Logs {
+        app_name: String,
+        instance_id: Option<String>,
+        tail: Option<usize>,
+    },
+    /// Attach to a running replica — stream log output and forward stdin.
+    Attach {
+        app_name: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClusterEnvelope {
+    pub auth_token: Option<String>,
+    pub request: ClusterRequest,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ClusterRequest {
     Apply(KubeApplication),
+    DeleteDeployment(String),
     GetDeployment(String),
     Scale {
         app_name: String,
         replicas: usize,
     },
     Describe(String),
-    Logs {
-        app_name: String,
-        tail: Option<usize>,
-    },
     GetNodes,
     RegisterNode {
         role: String,
@@ -47,8 +76,6 @@ pub enum RpcRequest {
         ram_usage: f32,
     },
     SyncState(KubeApplication),
-    /// Attach to a running replica — stream log output and forward stdin.
-    Attach { app_name: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -105,7 +132,7 @@ pub struct NodeInfo {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppDescription {
     pub deployment: KubeApplication,
-    pub replicas: Vec<ProcessInfo>,
+    pub replicas: Vec<InstanceInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -125,11 +152,17 @@ pub struct BaseInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ProcessInfo {
-    pub name: String,
+pub struct InstanceInfo {
+    pub instance_id: String,
     pub pid: u32,
     pub status: String,
     pub start_time: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppInfo {
+    pub app_name: String,
+    pub instances: Vec<InstanceInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -142,21 +175,27 @@ pub struct DepInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum RpcResponse {
+pub enum EngineResponse {
     Ok(String),
     Error(String),
-    ProcessList(Vec<ProcessInfo>),
+    AppList(Vec<AppInfo>),
     DepsList(Vec<DepInfo>),
     DepDetails(DepInfo),
     PruneResult(Vec<String>),
     BaseList(Vec<BaseInfo>),
     BaseDetails(BaseInfo),
-    DeploymentDetails(KubeApplication),
-    DescribeDetails(AppDescription),
-    NodeList(Vec<NodeInfo>),
     LogLines(Vec<String>),
     /// Sentinel: daemon is switching to raw attach streaming mode.
     AttachStream,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ClusterResponse {
+    Ok(String),
+    Error(String),
+    DeploymentDetails(KubeApplication),
+    DescribeDetails(AppDescription),
+    NodeList(Vec<NodeInfo>),
 }
 
 #[cfg(test)]
@@ -165,13 +204,19 @@ mod tests {
 
     #[test]
     fn test_rpc_request_serialization() {
-        let req = RpcRequest::Ps;
+        let req = EngineRequest::Ps { all: true };
         let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(json, "\"Ps\"");
+        assert_eq!(json, "{\"Ps\":{\"all\":true}}");
 
-        let req = RpcRequest::Stop("app1".to_string());
+        let req = EngineRequest::Stop {
+            app_name: "app1".to_string(),
+            instance_id: None,
+        };
         let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(json, "{\"Stop\":\"app1\"}");
+        assert_eq!(
+            json,
+            "{\"Stop\":{\"app_name\":\"app1\",\"instance_id\":null}}"
+        );
     }
 
     #[test]

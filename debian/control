@@ -10,7 +10,7 @@ Vcs-Git: https://github.com/reyhank45/openback.git
 
 Package: openback
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, etcd
 Description: OpenBack Orchestrator and CLI
  A multi-node distributed container orchestrator.
  Includes the openbackd daemon and backcli tool.

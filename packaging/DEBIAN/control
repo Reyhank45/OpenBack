@@ -1,9 +1,10 @@
 Package: openback
-Version: 0.1.0
+Version: 0.2.0
 Section: custom
 Priority: optional
 Architecture: amd64
 Maintainer: OpenBack Team <support@openback.io>
+Depends: etcd
 Description: OpenBack Orchestrator and CLI
  A multi-node distributed container orchestrator.
- Includes the openbackd daemon and backcli tool.
+ Includes the openbackd daemon, backlet orchestrator, and backctl tool.

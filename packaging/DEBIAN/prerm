@@ -5,6 +5,8 @@ if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
     # Stop and disable the service before removal
     systemctl stop openbackd.service || true
     systemctl disable openbackd.service || true
+    systemctl stop backlet.service || true
+    systemctl disable backlet.service || true
 fi
 
 exit 0

@@ -8,9 +8,12 @@ override_dh_auto_build:
 
 override_dh_auto_install:
 	install -D -m 0755 target/release/openback debian/openback/usr/bin/openback
-	install -D -m 0755 target/release/backcli debian/openback/usr/bin/backcli
+	install -D -m 0755 target/release/backctl debian/openback/usr/bin/backctl
+	install -D -m 0755 target/release/backlet debian/openback/usr/bin/backlet
 	install -D -m 0644 packaging/openbackd.service debian/openback/lib/systemd/system/openbackd.service
 	install -D -m 0644 packaging/openbackd.default debian/openback/etc/default/openbackd
+	install -D -m 0644 packaging/backlet.service debian/openback/lib/systemd/system/backlet.service
+	install -D -m 0644 packaging/backlet.default debian/openback/etc/default/backlet
 
 override_dh_auto_clean:
 	cargo clean

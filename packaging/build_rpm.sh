@@ -11,10 +11,10 @@ echo "Setting up RPM build environment..."
 mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
 echo "Creating source tarball..."
-# The spec file expects openback-0.1.1.tar.gz where the top-level directory is openback-0.1.1
+# The spec file expects openback-0.2.0.tar.gz where the top-level directory is openback-0.2.0
 cd ..
-tar --transform 's/^OpenBack/openback-0.1.1/' --exclude='./OpenBack/target' --exclude='./OpenBack/.git' --exclude='./OpenBack/openback-0.1.1.tar.gz' -czf openback-0.1.1.tar.gz OpenBack
-mv openback-0.1.1.tar.gz ~/rpmbuild/SOURCES/
+tar --transform 's/^OpenBack/openback-0.2.0/' --exclude='OpenBack/target' --exclude='OpenBack/.git' --exclude='OpenBack/openback-*.tar.gz' -czf openback-0.2.0.tar.gz OpenBack
+mv openback-0.2.0.tar.gz ~/rpmbuild/SOURCES/
 cd OpenBack
 
 echo "Copying spec file..."
@@ -24,8 +24,8 @@ echo "Building SRPM (Source RPM) and RPM (Binary)..."
 rpmbuild -ba --nodeps ~/rpmbuild/SPECS/openback.spec
 
 echo "Copying packages to project root..."
-cp ~/rpmbuild/SRPMS/openback-0.1.1-1*.src.rpm .
-cp ~/rpmbuild/RPMS/x86_64/openback-0.1.1-1*.rpm . || echo "Check RPMS dir for the generated binary package if architecture differs."
+cp ~/rpmbuild/SRPMS/openback-0.2.0-1*.src.rpm .
+cp ~/rpmbuild/RPMS/x86_64/openback-0.2.0-1*.rpm . || echo "Check RPMS dir for the generated binary package if architecture differs."
 
 echo "RPM Build Complete!"
-ls -la openback-0.1.1-1*
+ls -la openback-0.2.0-1*

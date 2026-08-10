@@ -1,6 +1,6 @@
 [package]
 name = "openback"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -19,11 +19,16 @@ sysinfo = "0.39.6"
 sha2 = "0.11.0"
 hex = "0.4.3"
 lazy_static = "1.5.0"
+etcd-client = "0.12"
 
 [[bin]]
 name = "openback"
 path = "src/main.rs"
 
 [[bin]]
-name = "backcli"
-path = "src/backcli.rs"
+name = "backctl"
+path = "src/backctl.rs"
+
+[[bin]]
+name = "backlet"
+path = "src/backlet.rs"

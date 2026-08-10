@@ -8,6 +8,8 @@ if [ "$1" = "configure" ]; then
     # Enable and start the service
     systemctl enable openbackd.service
     systemctl restart openbackd.service || true
+    systemctl enable backlet.service
+    systemctl restart backlet.service || true
 fi
 
 exit 0

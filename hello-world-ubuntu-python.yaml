@@ -10,9 +10,20 @@ spec:
   workDir: /app
   replicas: 1
   entrypoint:
-    - python3
+    - sh
     - -c
-    - "import socket, http.server, socketserver, os; s=os.environ.get('OPENBACK_IPC_SOCKET', '/run/app.sock'); os.path.exists(s) and os.remove(s); server=socketserver.UnixStreamServer(s, http.server.SimpleHTTPRequestHandler); print('Serving on', s); server.serve_forever()"
+    - |
+      cat << 'INNER_EOF' > /tmp/server.py
+      import socket, http.server, socketserver, os
+      s = os.environ.get('OPENBACK_IPC_SOCKET', '/run/app.sock')
+      if os.path.exists(s): os.remove(s)
+      class H(http.server.SimpleHTTPRequestHandler):
+          def address_string(self): return "unix"
+      server = socketserver.UnixStreamServer(s, H)
+      print('Serving on', s)
+      server.serve_forever()
+      INNER_EOF
+      python3 -u /tmp/server.py
   networking:
     ipc_socket: /run/app.sock
     ports:

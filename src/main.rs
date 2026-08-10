@@ -16,14 +16,8 @@ struct Cli {
 enum Commands {
     /// Start the OpenBack daemon
     Daemon {
-        #[arg(long, default_value = "standalone")]
-        role: String,
         #[arg(long)]
         port: Option<u16>,
-        #[arg(long)]
-        master_addr: Option<String>,
-        #[arg(long)]
-        cluster_token: Option<String>,
     },
     /// Run an application from a manifest file
     Run {
@@ -31,16 +25,29 @@ enum Commands {
         manifest_path: PathBuf,
     },
     /// List all running applications
-    Ps,
-    /// Stop a running application by name
-    Stop {
-        /// Name of the application to stop
-        app_name: String,
+    Ps {
+        #[arg(short, long)]
+        all: bool,
     },
-    /// Get logs for a running application
+    /// Stop a running container by name
+    Stop {
+        /// Name of the container to stop
+        container_name: String,
+    },
+    /// Start a stopped container by name
+    Start {
+        /// Name of the container to start
+        container_name: String,
+    },
+    /// Remove a stopped container
+    Rm {
+        /// Name of the container to remove
+        container_name: String,
+    },
+    /// Get logs for a container
     Logs {
-        /// Name of the application
-        app_name: String,
+        /// Name of the container
+        container_name: String,
     },
     /// Internal command to launch the container namespaces
     #[command(hide = true)]
@@ -99,25 +106,26 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Daemon {
-            role,
-            port,
-            master_addr,
-            cluster_token,
-        } => {
-            daemon::run_daemon(role, port, master_addr, cluster_token).await?;
+        Commands::Daemon { port } => {
+            daemon::run_daemon(port).await?;
         }
         Commands::Run { manifest_path } => {
             client::run_app(manifest_path).await?;
         }
-        Commands::Ps => {
-            client::ps().await?;
+        Commands::Ps { all } => {
+            client::ps(all).await?;
         }
-        Commands::Stop { app_name } => {
-            client::stop(app_name).await?;
+        Commands::Stop { container_name } => {
+            client::stop(container_name).await?;
         }
-        Commands::Logs { app_name } => {
-            client::logs(app_name).await?;
+        Commands::Start { container_name } => {
+            client::start(container_name).await?;
+        }
+        Commands::Rm { container_name } => {
+            client::rm(container_name).await?;
+        }
+        Commands::Logs { container_name } => {
+            client::logs(container_name).await?;
         }
         Commands::InternalLauncher { manifest_json } => {
             launcher::launch_container(manifest_json)?;
