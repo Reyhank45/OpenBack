@@ -27,6 +27,7 @@ rm -rf %{buildroot}
 install -D -m 0755 target/release/openback %{buildroot}/usr/bin/openback
 install -D -m 0755 target/release/backctl %{buildroot}/usr/bin/backctl
 install -D -m 0755 target/release/backlet %{buildroot}/usr/bin/backlet
+install -D -m 0755 target/release/backadm %{buildroot}/usr/bin/backadm
 install -D -m 0644 packaging/openbackd.service %{buildroot}/usr/lib/systemd/system/openbackd.service
 install -D -m 0644 packaging/openbackd.default %{buildroot}/etc/default/openbackd
 install -D -m 0644 packaging/backlet.service %{buildroot}/usr/lib/systemd/system/backlet.service
@@ -49,6 +50,7 @@ install -D -m 0644 packaging/backlet.default %{buildroot}/etc/default/backlet
 /usr/bin/openback
 /usr/bin/backctl
 /usr/bin/backlet
+/usr/bin/backadm
 /usr/lib/systemd/system/openbackd.service
 /usr/lib/systemd/system/backlet.service
 %config(noreplace) /etc/default/openbackd

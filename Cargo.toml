@@ -32,3 +32,7 @@ path = "src/backctl.rs"
 [[bin]]
 name = "backlet"
 path = "src/backlet.rs"
+
+[[bin]]
+name = "backadm"
+path = "src/backadm.rs"

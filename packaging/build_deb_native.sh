@@ -24,7 +24,7 @@ chmod 0755 $DEB_DIR/openback_0.2.0_amd64/DEBIAN/postinst \
            $DEB_DIR/openback_0.2.0_amd64/DEBIAN/postrm
 
 # Copy binaries
-cp target/release/openback target/release/backctl target/release/backlet $DEB_DIR/openback_0.2.0_amd64/usr/bin/
+cp target/release/openback target/release/backctl target/release/backlet target/release/backadm $DEB_DIR/openback_0.2.0_amd64/usr/bin/
 
 # Copy systemd
 cp packaging/openbackd.service $DEB_DIR/openback_0.2.0_amd64/lib/systemd/system/
